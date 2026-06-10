@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Jellyxtreme Settings</title>
+</head>
+<body>
+    <div id="JellyxtremeConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="JellyxtremeConfigForm">
+                    <div class="inputContainer">
+                        <label class="inputLabel" for="ServerUrl">Xtream Codes Server URL:</label>
+                        <input type="url" id="ServerUrl" is="emby-input" required />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel" for="Username">Username:</label>
+                        <input type="text" id="Username" is="emby-input" required />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel" for="Password">Password:</label>
+                        <input type="password" id="Password" is="emby-input" required />
+                    </div>
+
+                    <h2>Movies</h2>
+                    <label class="checkboxContainer">
+                        <input type="checkbox" is="emby-checkbox" id="ImportMovies" />
+                        <span>Import Movies as STRM files</span>
+                    </label>
+                    <div class="inputContainer">
+                        <label class="inputLabel" for="MoviesPath">Movies Output Path:</label>
+                        <input type="text" id="MoviesPath" is="emby-input" />
+                    </div>
+
+                    <h2>Series</h2>
+                    <label class="checkboxContainer">
+                        <input type="checkbox" is="emby-checkbox" id="ImportSeries" />
+                        <span>Import Series as STRM files</span>
+                    </label>
+                    <div class="inputContainer">
+                        <label class="inputLabel" for="SeriesPath">Series Output Path:</label>
+                        <input type="text" id="SeriesPath" is="emby-input" />
+                    </div>
+
+                    <h2>Live TV</h2>
+                    <label class="checkboxContainer">
+                        <input type="checkbox" is="emby-checkbox" id="ImportLiveTv" />
+                        <span>Export Live TV as M3U</span>
+                    </label>
+                    <div class="inputContainer">
+                        <label class="inputLabel" for="LiveTvM3uPath">M3U Output Path (e.g., /config/livetv.m3u):</label>
+                        <input type="text" id="LiveTvM3uPath" is="emby-input" />
+                    </div>
+
+                    <button is="emby-button" type="submit" class="raised button-submit block"><i class="md-icon">check</i><span>Save</span></button>
+                </form>
+            </div>
+        </div>
+
+        <script>
+            (function () {
+                var pluginId = "A4B6C922-1D5F-4E90-B8A6-FA3A6E4C4D78";
+
+                document.getElementById('JellyxtremeConfigPage').addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    var page = this;
+
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        page.querySelector('#ServerUrl').value = config.ServerUrl || '';
+                        page.querySelector('#Username').value = config.Username || '';
+                        page.querySelector('#Password').value = config.Password || '';
+                        page.querySelector('#ImportMovies').checked = config.ImportMovies || false;
+                        page.querySelector('#MoviesPath').value = config.MoviesPath || '';
+                        page.querySelector('#ImportSeries').checked = config.ImportSeries || false;
+                        page.querySelector('#SeriesPath').value = config.SeriesPath || '';
+                        page.querySelector('#ImportLiveTv').checked = config.ImportLiveTv || false;
+                        page.querySelector('#LiveTvM3uPath').value = config.LiveTvM3uPath || '';
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+
+                document.getElementById('JellyxtremeConfigForm').addEventListener('submit', function (e) {
+                    Dashboard.showLoadingMsg();
+                    var form = this;
+
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        config.ServerUrl = form.querySelector('#ServerUrl').value;
+                        config.Username = form.querySelector('#Username').value;
+                        config.Password = form.querySelector('#Password').value;
+                        config.ImportMovies = form.querySelector('#ImportMovies').checked;
+                        config.MoviesPath = form.querySelector('#MoviesPath').value;
+                        config.ImportSeries = form.querySelector('#ImportSeries').checked;
+                        config.SeriesPath = form.querySelector('#SeriesPath').value;
+                        config.ImportLiveTv = form.querySelector('#ImportLiveTv').checked;
+                        config.LiveTvM3uPath = form.querySelector('#LiveTvM3uPath').value;
+
+                        ApiClient.updatePluginConfiguration(pluginId, config).then(Dashboard.processPluginConfigurationUpdateResult);
+                    });
+
+                    e.preventDefault();
+                    return false;
+                });
+            })();
+        </script>
+    </div>
+</body>
+</html>
