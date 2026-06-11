@@ -1,0 +1,12 @@
+{
+  "category": "Live TV",
+  "changelog": "Refactored toward native selectable Xtream provider/cache architecture.",
+  "description": "Native Jellyfin provider/cache foundation for selected Xtream Live TV, VOD, and Series categories.",
+  "guid": "a4b6c922-1d5f-4e90-b8a6-fa3a6e4c4d78",
+  "name": "Jellyxtreme",
+  "overview": "Selectable Xtream provider integration for Jellyfin.",
+  "owner": "sn45k58myn-dev",
+  "targetAbi": "10.11.0.0",
+  "timestamp": "2026-06-11T00:00:00Z",
+  "version": "0.2.0"
+}

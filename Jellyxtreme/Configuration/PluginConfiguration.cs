@@ -8,14 +8,16 @@ namespace Jellyxtreme.Configuration
         public string Username { get; set; } = string.Empty;
         public string Password { get; set; } = string.Empty;
 
-        public bool ImportMovies { get; set; } = false;
-        public string MoviesPath { get; set; } = string.Empty;
+        public bool EnableLiveTv { get; set; }
+        public bool EnableVod { get; set; }
+        public bool EnableSeries { get; set; }
 
-        public bool ImportSeries { get; set; } = false;
-        public string SeriesPath { get; set; } = string.Empty;
+        public string[] SelectedLiveCategoryIds { get; set; } = [];
+        public string[] SelectedVodCategoryIds { get; set; } = [];
+        public string[] SelectedSeriesCategoryIds { get; set; } = [];
 
-        public bool ImportLiveTv { get; set; } = false;
-        public string LiveTvM3uPath { get; set; } = string.Empty;
+        public int SyncIntervalHours { get; set; } = 12;
+        public int CacheMinutes { get; set; } = 60;
 
         public PluginConfiguration()
         {

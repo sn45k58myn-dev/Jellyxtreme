@@ -1,34 +1,71 @@
 # Jellyxtreme
 
-Jellyxtreme is a Jellyfin plugin that connects to an Xtream Codes API provider to grab Live TV, Movies, and Series, and imports them seamlessly into your Jellyfin server.
+Jellyxtreme is a Jellyfin plugin for connecting to authorised Xtream-compatible providers. The plugin is being refactored toward a native Jellyfin provider/cache architecture for Jellyfin 10.11.x and .NET 8.
 
-It gives you full control over what is imported:
-- **Live TV:** Generates a local `.m3u` file that you can add as a tuner device in Jellyfin's Live TV settings.
-- **Movies:** Creates `.strm` files pointing to the VOD streams in a designated "Movies" folder, which Jellyfin can scan natively.
-- **Series:** Creates structured folders and `.strm` files for your series and episodes in a designated "Series" folder.
+Jellyxtreme now caches only explicitly selected import sections and categories:
+
+- **Live TV:** selected Xtream live categories are cached as channel metadata with stream IDs, logos, EPG IDs, and group names.
+- **VOD:** selected VOD categories are cached as movie metadata with posters, ratings, container extensions, and added dates.
+- **Series:** selected series categories are cached with series metadata, seasons, episodes, episode stream IDs, and container extensions.
+
+Default mode does not generate `.strm` files or `.m3u` playlists.
 
 ## Compatibility
 
-- Jellyfin version 10.9.x
-- Built against .NET 8.0
+- Jellyfin 10.11.x
+- .NET 8 target framework
+- Jellyfin package references: 10.10.7, the latest stable Jellyfin package line that restores against `net8.0`. Current Jellyfin 10.11.x NuGet packages target `net9.0`, so they cannot be referenced while keeping `TargetFramework` at `net8.0`.
 
-## Setup & Configuration
+## Legal Use
 
-1. **Build the plugin:**
-   Ensure you have the .NET 8 SDK installed. Run `dotnet build` inside the `Jellyxtreme` folder to compile the plugin `Jellyxtreme.dll`.
+Only connect Jellyxtreme to lawful and authorised Xtream providers. You are responsible for ensuring that your provider, credentials, and streams are licensed for your use.
 
-2. **Install to Jellyfin:**
-   - Copy the compiled `Jellyxtreme.dll` to your Jellyfin's `plugins` folder inside a new directory (e.g., `plugins/Jellyxtreme/Jellyxtreme.dll`).
-   - Restart the Jellyfin server.
+## Build
 
-3. **Configure the Plugin:**
-   - Open your Jellyfin Dashboard.
-   - Go to `Plugins` and click on `Jellyxtreme`.
-   - Enter your **Xtream Codes Server URL**, **Username**, and **Password**.
-   - Enable the categories you want to import (Movies, Series, Live TV).
-   - For Movies and Series, provide the output paths where `.strm` files will be saved. You should add these output paths as Libraries in your Jellyfin server (e.g. Media Type: Movies or TV Shows).
-   - For Live TV, provide the path to output the `livetv.m3u` file (e.g., `/config/livetv.m3u`), and add this M3U Tuner in Jellyfin's Live TV settings.
+Install the .NET 8 SDK, then run:
 
-4. **Sync Task:**
-   - Go to `Dashboard` -> `Scheduled Tasks`.
-   - Under the `Jellyxtreme` category, run the `Xtream Codes Sync` task. It will automatically populate the paths you defined.
+```powershell
+dotnet restore .\Jellyxtreme\Jellyxtreme.csproj
+dotnet build .\Jellyxtreme\Jellyxtreme.csproj
+```
+
+The plugin assembly is produced under `Jellyxtreme/bin/<Configuration>/net8.0/`.
+
+## Install
+
+1. Build the project.
+2. Create a Jellyfin plugin directory, for example `plugins/Jellyxtreme`.
+3. Copy `Jellyxtreme.dll` and `plugin.json` into that directory.
+4. Restart Jellyfin.
+5. Open Dashboard -> Plugins -> Jellyxtreme.
+
+## Configuration
+
+1. Enter the Xtream server URL, username, and password.
+2. Use **Test Connection** to validate the endpoint.
+3. Use **Refresh Categories** to load Live TV, VOD, and Series categories.
+4. Enable only the sections you want to cache.
+5. Select category checkboxes for each enabled section.
+6. Save the configuration.
+7. Run Dashboard -> Scheduled Tasks -> **JellyXtreme: Refresh Xtream Cache**.
+
+If no categories are selected, Jellyxtreme imports nothing. If only one section is enabled and selected, the other sections are skipped.
+
+## Architecture
+
+- `Api/XtreamApiClient.cs` contains authenticated Xtream API calls for categories, streams, series info, and XMLTV.
+- `Cache/` contains the provider cache document and persisted cache store.
+- `Services/XtreamCacheRefreshService.cs` refreshes selected categories only.
+- `Providers/` contains Live TV, VOD, and Series provider foundations plus stream URL resolution.
+- `Configuration/configPage.html` is the embedded admin page.
+- `Tasks/XtreamSyncTask.cs` exposes the manual scheduled cache refresh task.
+
+Sensitive values are kept out of logs. Server URLs are validated as absolute `http` or `https` URLs, and authenticated stream URLs are resolved only when playback/provider code requests them.
+
+## Roadmap
+
+- Wire the Live TV foundation into Jellyfin's current 10.11 provider/tuner APIs where plugin support allows.
+- Expose cached VOD and Series entries through native Jellyfin provider/library integration.
+- Add optional M3U export as a separate opt-in feature, not as the default flow.
+- Add encrypted or Jellyfin-managed secret storage for provider passwords when a stable plugin API is available.
+- Add automated tests around category filtering, cache refresh, and credential redaction.
