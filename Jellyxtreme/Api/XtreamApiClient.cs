@@ -143,7 +143,7 @@ public sealed class XtreamApiClient
     private string BuildStreamUrl(string type, int streamId, string extension)
     {
         var safeExtension = string.IsNullOrWhiteSpace(extension) ? "mp4" : extension.TrimStart('.');
-        return new Uri(_serverUri, $"{type}/{Uri.EscapeDataString(_username)}/{Uri.EscapeDataString(_password)}/{streamId}.{safeExtension}").ToString();
+        return new Uri(_serverUri, $"{type}/{Uri.EscapeDataString(_username)}/{Uri.EscapeDataString(_password)}/{streamId}.{safeExtension}").AbsoluteUri;
     }
 
     public static string Redact(string value)

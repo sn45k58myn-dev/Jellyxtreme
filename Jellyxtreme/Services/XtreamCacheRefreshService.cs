@@ -8,17 +8,17 @@ namespace Jellyxtreme.Services;
 public sealed class XtreamCacheRefreshService
 {
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly XtreamCacheStore _cacheStore;
+    private readonly XtreamCacheService _cacheService;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<XtreamCacheRefreshService> _logger;
 
     public XtreamCacheRefreshService(
         IHttpClientFactory httpClientFactory,
-        XtreamCacheStore cacheStore,
+        XtreamCacheService cacheService,
         ILoggerFactory loggerFactory)
     {
         _httpClientFactory = httpClientFactory;
-        _cacheStore = cacheStore;
+        _cacheService = cacheService;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<XtreamCacheRefreshService>();
     }
@@ -61,7 +61,7 @@ public sealed class XtreamCacheRefreshService
 
         if (config.EnableVod && config.SelectedVodCategoryIds.Length > 0)
         {
-            document.VodMovies = await RefreshVodAsync(client, config, cancellationToken).ConfigureAwait(false);
+            document.VodItems = await RefreshVodAsync(client, config, cancellationToken).ConfigureAwait(false);
         }
         else
         {
@@ -72,7 +72,7 @@ public sealed class XtreamCacheRefreshService
 
         if (config.EnableSeries && config.SelectedSeriesCategoryIds.Length > 0)
         {
-            document.Series = await RefreshSeriesAsync(client, config, cancellationToken).ConfigureAwait(false);
+            document.SeriesItems = await RefreshSeriesAsync(client, config, cancellationToken).ConfigureAwait(false);
         }
         else
         {
@@ -80,7 +80,8 @@ public sealed class XtreamCacheRefreshService
         }
 
         progress?.Report(95);
-        await _cacheStore.SaveAsync(document, cancellationToken).ConfigureAwait(false);
+        config.LastSuccessfulSyncUtc = document.RefreshedAt;
+        await _cacheService.SaveAsync(document, cancellationToken).ConfigureAwait(false);
         progress?.Report(100);
         return document;
     }
@@ -131,12 +132,11 @@ public sealed class XtreamCacheRefreshService
         List<CachedCategory> categories,
         CancellationToken cancellationToken)
     {
-        var selected = config.SelectedLiveCategoryIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var categoryNames = categories.ToDictionary(category => category.CategoryId, category => category.Name, StringComparer.OrdinalIgnoreCase);
         var streams = await client.GetLiveStreamsAsync(cancellationToken).ConfigureAwait(false);
 
         return streams
-            .Where(stream => !string.IsNullOrWhiteSpace(stream.CategoryId) && selected.Contains(stream.CategoryId))
+            .Where(stream => XtreamSelectionFilter.IsCategorySelected(stream.CategoryId, config.SelectedLiveCategoryIds))
             .Where(stream => stream.StreamId > 0 && !string.IsNullOrWhiteSpace(stream.Name))
             .Select(stream => new CachedLiveChannel
             {
@@ -151,18 +151,17 @@ public sealed class XtreamCacheRefreshService
             .ToList();
     }
 
-    private static async Task<List<CachedVodMovie>> RefreshVodAsync(
+    private static async Task<List<CachedVodItem>> RefreshVodAsync(
         XtreamApiClient client,
         PluginConfiguration config,
         CancellationToken cancellationToken)
     {
-        var selected = config.SelectedVodCategoryIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var streams = await client.GetVodStreamsAsync(cancellationToken).ConfigureAwait(false);
 
         return streams
-            .Where(stream => !string.IsNullOrWhiteSpace(stream.CategoryId) && selected.Contains(stream.CategoryId))
+            .Where(stream => XtreamSelectionFilter.IsCategorySelected(stream.CategoryId, config.SelectedVodCategoryIds))
             .Where(stream => stream.StreamId > 0 && !string.IsNullOrWhiteSpace(stream.Name))
-            .Select(stream => new CachedVodMovie
+            .Select(stream => new CachedVodItem
             {
                 Name = stream.Name!,
                 StreamId = stream.StreamId,
@@ -175,19 +174,18 @@ public sealed class XtreamCacheRefreshService
             .ToList();
     }
 
-    private async Task<List<CachedSeries>> RefreshSeriesAsync(
+    private async Task<List<CachedSeriesItem>> RefreshSeriesAsync(
         XtreamApiClient client,
         PluginConfiguration config,
         CancellationToken cancellationToken)
     {
-        var selected = config.SelectedSeriesCategoryIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var seriesList = await client.GetSeriesAsync(cancellationToken).ConfigureAwait(false);
         var selectedSeries = seriesList
-            .Where(series => !string.IsNullOrWhiteSpace(series.CategoryId) && selected.Contains(series.CategoryId))
+            .Where(series => XtreamSelectionFilter.IsCategorySelected(series.CategoryId, config.SelectedSeriesCategoryIds))
             .Where(series => series.SeriesId > 0 && !string.IsNullOrWhiteSpace(series.Name))
             .ToList();
 
-        var cached = new List<CachedSeries>(selectedSeries.Count);
+        var cached = new List<CachedSeriesItem>(selectedSeries.Count);
         foreach (var series in selectedSeries)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -195,7 +193,7 @@ public sealed class XtreamCacheRefreshService
             try
             {
                 var info = await client.GetSeriesInfoAsync(series.SeriesId, cancellationToken).ConfigureAwait(false);
-                cached.Add(new CachedSeries
+                cached.Add(new CachedSeriesItem
                 {
                     Name = series.Name!,
                     SeriesId = series.SeriesId,
@@ -234,7 +232,7 @@ public sealed class XtreamCacheRefreshService
                         .Select(episode =>
                         {
                             _ = int.TryParse(episode.Id, out var streamId);
-                            return new CachedEpisode
+                            return new CachedEpisodeItem
                             {
                                 Title = string.IsNullOrWhiteSpace(episode.Title) ? $"Episode {episode.EpisodeNumber}" : episode.Title!,
                                 StreamId = streamId,

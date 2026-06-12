@@ -4,12 +4,12 @@ using Microsoft.Extensions.Logging;
 
 namespace Jellyxtreme.Services;
 
-public sealed class XtreamStreamResolver
+public sealed class StreamResolverService
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
 
-    public XtreamStreamResolver(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory)
+    public StreamResolverService(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory)
     {
         _httpClientFactory = httpClientFactory;
         _loggerFactory = loggerFactory;

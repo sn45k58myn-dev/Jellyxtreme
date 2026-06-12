@@ -6,21 +6,21 @@ namespace Jellyxtreme.Providers;
 
 public sealed class XtreamVodProvider
 {
-    private readonly XtreamCacheStore _cacheStore;
-    private readonly XtreamStreamResolver _streamResolver;
+    private readonly XtreamCacheService _cacheService;
+    private readonly StreamResolverService _streamResolver;
 
-    public XtreamVodProvider(XtreamCacheStore cacheStore, XtreamStreamResolver streamResolver)
+    public XtreamVodProvider(XtreamCacheService cacheService, StreamResolverService streamResolver)
     {
-        _cacheStore = cacheStore;
+        _cacheService = cacheService;
         _streamResolver = streamResolver;
     }
 
-    public async Task<IReadOnlyList<CachedVodMovie>> GetMoviesAsync(CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<CachedVodItem>> GetMoviesAsync(CancellationToken cancellationToken)
     {
-        var cache = await _cacheStore.LoadAsync(cancellationToken).ConfigureAwait(false);
-        return cache.VodMovies;
+        var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
+        return cache.VodItems;
     }
 
-    public string ResolveMovieStreamUrl(PluginConfiguration config, CachedVodMovie movie)
+    public string ResolveMovieStreamUrl(PluginConfiguration config, CachedVodItem movie)
         => _streamResolver.ResolveVodUrl(config, movie.StreamId, movie.ContainerExtension);
 }

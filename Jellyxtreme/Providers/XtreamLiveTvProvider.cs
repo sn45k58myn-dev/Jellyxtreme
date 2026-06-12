@@ -6,18 +6,18 @@ namespace Jellyxtreme.Providers;
 
 public sealed class XtreamLiveTvProvider
 {
-    private readonly XtreamCacheStore _cacheStore;
-    private readonly XtreamStreamResolver _streamResolver;
+    private readonly XtreamCacheService _cacheService;
+    private readonly StreamResolverService _streamResolver;
 
-    public XtreamLiveTvProvider(XtreamCacheStore cacheStore, XtreamStreamResolver streamResolver)
+    public XtreamLiveTvProvider(XtreamCacheService cacheService, StreamResolverService streamResolver)
     {
-        _cacheStore = cacheStore;
+        _cacheService = cacheService;
         _streamResolver = streamResolver;
     }
 
     public async Task<IReadOnlyList<XtreamLiveChannelInfo>> GetChannelsAsync(CancellationToken cancellationToken)
     {
-        var cache = await _cacheStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
         return cache.LiveChannels
             .Select(channel => new XtreamLiveChannelInfo(
                 channel.Name,

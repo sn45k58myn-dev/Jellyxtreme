@@ -56,10 +56,17 @@ public sealed class JellyxtremeController : ControllerBase
 
         var service = new XtreamCacheRefreshService(
             _httpClientFactory,
-            new XtreamCacheStore(_loggerFactory.CreateLogger<XtreamCacheStore>()),
+            new XtreamCacheService(_loggerFactory.CreateLogger<XtreamCacheService>()),
             _loggerFactory);
 
         return Ok(await service.GetCategoriesAsync(config, cancellationToken).ConfigureAwait(false));
+    }
+
+    [HttpGet("CacheSummary")]
+    public async Task<ActionResult<XtreamCacheSummary>> GetCacheSummary(CancellationToken cancellationToken)
+    {
+        var cache = new XtreamCacheService(_loggerFactory.CreateLogger<XtreamCacheService>());
+        return Ok(await cache.GetSummaryAsync(cancellationToken).ConfigureAwait(false));
     }
 }
 

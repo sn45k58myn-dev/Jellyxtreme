@@ -47,9 +47,15 @@ public sealed class XtreamSyncTask : IScheduledTask
 
         var service = new XtreamCacheRefreshService(
             _httpClientFactory,
-            new XtreamCacheStore(_loggerFactory.CreateLogger<XtreamCacheStore>()),
+            new XtreamCacheService(_loggerFactory.CreateLogger<XtreamCacheService>()),
             _loggerFactory);
 
-        await service.RefreshAsync(config, progress, cancellationToken).ConfigureAwait(false);
+        var document = await service.RefreshAsync(config, progress, cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation(
+            "JellyXtreme cache refresh complete. Live: {LiveCount}; VOD: {VodCount}; Series: {SeriesCount}; Episodes: {EpisodeCount}.",
+            document.LiveChannels.Count,
+            document.VodItems.Count,
+            document.SeriesItems.Count,
+            document.SeriesItems.Sum(series => series.Seasons.Sum(season => season.Episodes.Count)));
     }
 }

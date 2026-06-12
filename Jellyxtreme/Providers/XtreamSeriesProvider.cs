@@ -6,21 +6,21 @@ namespace Jellyxtreme.Providers;
 
 public sealed class XtreamSeriesProvider
 {
-    private readonly XtreamCacheStore _cacheStore;
-    private readonly XtreamStreamResolver _streamResolver;
+    private readonly XtreamCacheService _cacheService;
+    private readonly StreamResolverService _streamResolver;
 
-    public XtreamSeriesProvider(XtreamCacheStore cacheStore, XtreamStreamResolver streamResolver)
+    public XtreamSeriesProvider(XtreamCacheService cacheService, StreamResolverService streamResolver)
     {
-        _cacheStore = cacheStore;
+        _cacheService = cacheService;
         _streamResolver = streamResolver;
     }
 
-    public async Task<IReadOnlyList<CachedSeries>> GetSeriesAsync(CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<CachedSeriesItem>> GetSeriesAsync(CancellationToken cancellationToken)
     {
-        var cache = await _cacheStore.LoadAsync(cancellationToken).ConfigureAwait(false);
-        return cache.Series;
+        var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
+        return cache.SeriesItems;
     }
 
-    public string ResolveEpisodeStreamUrl(PluginConfiguration config, CachedEpisode episode)
+    public string ResolveEpisodeStreamUrl(PluginConfiguration config, CachedEpisodeItem episode)
         => _streamResolver.ResolveEpisodeUrl(config, episode.StreamId, episode.ContainerExtension);
 }

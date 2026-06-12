@@ -40,12 +40,14 @@
                         </button>
                     </div>
                     <p id="ConnectionStatus" class="fieldDescription"></p>
+                    <p id="CacheSummary" class="fieldDescription"></p>
 
                     <h2>Live TV</h2>
                     <label class="checkboxContainer">
                         <input type="checkbox" is="emby-checkbox" id="EnableLiveTv" />
                         <span>Enable Live TV cache</span>
                     </label>
+                    <p id="LiveCategoryCount" class="fieldDescription">0 selected</p>
                     <div id="LiveCategories" class="categoryList"></div>
 
                     <h2>VOD</h2>
@@ -53,6 +55,7 @@
                         <input type="checkbox" is="emby-checkbox" id="EnableVod" />
                         <span>Enable VOD cache</span>
                     </label>
+                    <p id="VodCategoryCount" class="fieldDescription">0 selected</p>
                     <div id="VodCategories" class="categoryList"></div>
 
                     <h2>Series</h2>
@@ -60,6 +63,7 @@
                         <input type="checkbox" is="emby-checkbox" id="EnableSeries" />
                         <span>Enable Series cache</span>
                     </label>
+                    <p id="SeriesCategoryCount" class="fieldDescription">0 selected</p>
                     <div id="SeriesCategories" class="categoryList"></div>
 
                     <button is="emby-button" type="submit" class="raised button-submit block">
@@ -103,11 +107,36 @@
                     });
                 }
 
+                function getJson(path) {
+                    return ApiClient.ajax({
+                        type: 'GET',
+                        url: ApiClient.getUrl(path)
+                    });
+                }
+
                 function selectedCategoryIds(containerId) {
                     return Array.prototype.slice.call(page().querySelectorAll('#' + containerId + ' input[type="checkbox"]:checked'))
                         .map(function (input) {
                             return input.value;
                         });
+                }
+
+                function updateSelectedCounts() {
+                    page().querySelector('#LiveCategoryCount').textContent = selectedCategoryIds('LiveCategories').length + ' selected';
+                    page().querySelector('#VodCategoryCount').textContent = selectedCategoryIds('VodCategories').length + ' selected';
+                    page().querySelector('#SeriesCategoryCount').textContent = selectedCategoryIds('SeriesCategories').length + ' selected';
+                }
+
+                function loadCacheSummary() {
+                    return getJson('Jellyxtreme/CacheSummary').then(function (summary) {
+                        var live = summary.LiveChannelCount || summary.liveChannelCount || 0;
+                        var vod = summary.VodItemCount || summary.vodItemCount || 0;
+                        var series = summary.SeriesItemCount || summary.seriesItemCount || 0;
+                        var episodes = summary.EpisodeItemCount || summary.episodeItemCount || 0;
+                        page().querySelector('#CacheSummary').textContent = live + ' live channels, ' + vod + ' VOD items, ' + series + ' series, ' + episodes + ' episodes cached';
+                    }).catch(function () {
+                        page().querySelector('#CacheSummary').textContent = '';
+                    });
                 }
 
                 function renderCategoryList(containerId, categories, selectedIds) {
@@ -130,6 +159,7 @@
                         input.setAttribute('is', 'emby-checkbox');
                         input.value = id;
                         input.checked = selected.has(id);
+                        input.addEventListener('change', updateSelectedCounts);
 
                         var span = document.createElement('span');
                         span.textContent = name;
@@ -138,6 +168,7 @@
                         label.appendChild(span);
                         container.appendChild(label);
                     });
+                    updateSelectedCounts();
                 }
 
                 function loadConfig() {
@@ -154,6 +185,8 @@
                         page().querySelector('#SyncIntervalHours').value = currentConfig.SyncIntervalHours || 12;
                         page().querySelector('#CacheMinutes').value = currentConfig.CacheMinutes || 60;
                         Dashboard.hideLoadingMsg();
+                        updateSelectedCounts();
+                        loadCacheSummary();
                     });
                 }
 

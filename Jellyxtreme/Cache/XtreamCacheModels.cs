@@ -7,8 +7,8 @@ public sealed class XtreamCacheDocument
     public List<CachedCategory> VodCategories { get; set; } = [];
     public List<CachedCategory> SeriesCategories { get; set; } = [];
     public List<CachedLiveChannel> LiveChannels { get; set; } = [];
-    public List<CachedVodMovie> VodMovies { get; set; } = [];
-    public List<CachedSeries> Series { get; set; } = [];
+    public List<CachedVodItem> VodItems { get; set; } = [];
+    public List<CachedSeriesItem> SeriesItems { get; set; } = [];
 }
 
 public sealed class CachedCategory
@@ -29,7 +29,7 @@ public sealed class CachedLiveChannel
     public string StreamExtension { get; set; } = "ts";
 }
 
-public sealed class CachedVodMovie
+public sealed class CachedVodItem
 {
     public string Name { get; set; } = string.Empty;
     public int StreamId { get; set; }
@@ -40,7 +40,7 @@ public sealed class CachedVodMovie
     public string? Added { get; set; }
 }
 
-public sealed class CachedSeries
+public sealed class CachedSeriesItem
 {
     public string Name { get; set; } = string.Empty;
     public int SeriesId { get; set; }
@@ -54,10 +54,10 @@ public sealed class CachedSeries
 public sealed class CachedSeason
 {
     public int SeasonNumber { get; set; }
-    public List<CachedEpisode> Episodes { get; set; } = [];
+    public List<CachedEpisodeItem> Episodes { get; set; } = [];
 }
 
-public sealed class CachedEpisode
+public sealed class CachedEpisodeItem
 {
     public string Title { get; set; } = string.Empty;
     public int StreamId { get; set; }
@@ -67,3 +67,13 @@ public sealed class CachedEpisode
     public string? Plot { get; set; }
     public string? ReleaseDate { get; set; }
 }
+
+public sealed record XtreamCacheSummary(
+    DateTimeOffset? RefreshedAt,
+    int LiveCategoryCount,
+    int VodCategoryCount,
+    int SeriesCategoryCount,
+    int LiveChannelCount,
+    int VodItemCount,
+    int SeriesItemCount,
+    int EpisodeItemCount);

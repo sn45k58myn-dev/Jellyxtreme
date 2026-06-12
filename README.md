@@ -27,6 +27,7 @@ Install the .NET 8 SDK, then run:
 ```powershell
 dotnet restore .\Jellyxtreme\Jellyxtreme.csproj
 dotnet build .\Jellyxtreme\Jellyxtreme.csproj
+dotnet test .\Jellyxtreme.Tests\Jellyxtreme.Tests.csproj
 ```
 
 The plugin assembly is produced under `Jellyxtreme/bin/<Configuration>/net8.0/`.
@@ -54,11 +55,13 @@ If no categories are selected, Jellyxtreme imports nothing. If only one section 
 ## Architecture
 
 - `Api/XtreamApiClient.cs` contains authenticated Xtream API calls for categories, streams, series info, and XMLTV.
-- `Cache/` contains the provider cache document and persisted cache store.
+- `Cache/` contains `XtreamCacheService`, the provider cache document, category caches, cached live channels, VOD items, series items, and episode items.
 - `Services/XtreamCacheRefreshService.cs` refreshes selected categories only.
-- `Providers/` contains Live TV, VOD, and Series provider foundations plus stream URL resolution.
+- `Services/StreamResolverService.cs` resolves authenticated Xtream URLs only at playback time.
+- `Providers/` contains Live TV, VOD, and Series provider foundations over the cache.
 - `Configuration/configPage.html` is the embedded admin page.
 - `Tasks/XtreamSyncTask.cs` exposes the manual scheduled cache refresh task.
+- `Jellyxtreme.Tests/` covers URL building, category filtering, credential redaction, and config defaults.
 
 Sensitive values are kept out of logs. Server URLs are validated as absolute `http` or `https` URLs, and authenticated stream URLs are resolved only when playback/provider code requests them.
 

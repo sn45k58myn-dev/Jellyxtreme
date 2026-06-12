@@ -3,12 +3,12 @@ using Microsoft.Extensions.Logging;
 
 namespace Jellyxtreme.Cache;
 
-public sealed class XtreamCacheStore
+public sealed class XtreamCacheService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-    private readonly ILogger<XtreamCacheStore> _logger;
+    private readonly ILogger<XtreamCacheService> _logger;
 
-    public XtreamCacheStore(ILogger<XtreamCacheStore> logger)
+    public XtreamCacheService(ILogger<XtreamCacheService> logger)
     {
         _logger = logger;
     }
@@ -35,8 +35,22 @@ public sealed class XtreamCacheStore
         await JsonSerializer.SerializeAsync(stream, document, JsonOptions, cancellationToken).ConfigureAwait(false);
         _logger.LogInformation("JellyXtreme cache refreshed with {LiveCount} live channels, {VodCount} VOD movies, and {SeriesCount} series.",
             document.LiveChannels.Count,
-            document.VodMovies.Count,
-            document.Series.Count);
+            document.VodItems.Count,
+            document.SeriesItems.Count);
+    }
+
+    public async Task<XtreamCacheSummary> GetSummaryAsync(CancellationToken cancellationToken)
+    {
+        var document = await LoadAsync(cancellationToken).ConfigureAwait(false);
+        return new XtreamCacheSummary(
+            document.RefreshedAt,
+            document.LiveCategories.Count,
+            document.VodCategories.Count,
+            document.SeriesCategories.Count,
+            document.LiveChannels.Count,
+            document.VodItems.Count,
+            document.SeriesItems.Count,
+            document.SeriesItems.Sum(series => series.Seasons.Sum(season => season.Episodes.Count)));
     }
 
     private static string GetCachePath()
