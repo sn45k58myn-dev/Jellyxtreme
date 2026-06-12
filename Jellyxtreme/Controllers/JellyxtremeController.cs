@@ -14,12 +14,20 @@ namespace Jellyxtreme.Controllers;
 public sealed class JellyxtremeController : ControllerBase
 {
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ILoggerFactory _loggerFactory;
+    private readonly XtreamCacheRefreshService _cacheRefreshService;
+    private readonly XtreamCacheService _cacheService;
+    private readonly ILogger<XtreamApiClient> _apiLogger;
 
-    public JellyxtremeController(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory)
+    public JellyxtremeController(
+        IHttpClientFactory httpClientFactory,
+        XtreamCacheRefreshService cacheRefreshService,
+        XtreamCacheService cacheService,
+        ILogger<XtreamApiClient> apiLogger)
     {
         _httpClientFactory = httpClientFactory;
-        _loggerFactory = loggerFactory;
+        _cacheRefreshService = cacheRefreshService;
+        _cacheService = cacheService;
+        _apiLogger = apiLogger;
     }
 
     [HttpPost("TestConnection")]
@@ -27,14 +35,14 @@ public sealed class JellyxtremeController : ControllerBase
         [FromBody] XtreamConnectionRequest request,
         CancellationToken cancellationToken)
     {
-        if (!XtreamApiClient.TryNormalizeServerUrl(request.ServerUrl, out _))
+        if (!IsValidRequest(request, out var validationMessage))
         {
-            return BadRequest(new XtreamConnectionResult(false, "Server URL must be an absolute http or https URL."));
+            return BadRequest(new XtreamConnectionResult(false, validationMessage));
         }
 
         var client = new XtreamApiClient(
             _httpClientFactory,
-            _loggerFactory.CreateLogger<XtreamApiClient>(),
+            _apiLogger,
             request.ServerUrl,
             request.Username,
             request.Password);
@@ -47,6 +55,11 @@ public sealed class JellyxtremeController : ControllerBase
         [FromBody] XtreamConnectionRequest request,
         CancellationToken cancellationToken)
     {
+        if (!IsValidRequest(request, out var validationMessage))
+        {
+            return BadRequest(new { Message = validationMessage });
+        }
+
         var config = new PluginConfiguration
         {
             ServerUrl = request.ServerUrl,
@@ -54,19 +67,43 @@ public sealed class JellyxtremeController : ControllerBase
             Password = request.Password
         };
 
-        var service = new XtreamCacheRefreshService(
-            _httpClientFactory,
-            new XtreamCacheService(_loggerFactory.CreateLogger<XtreamCacheService>()),
-            _loggerFactory);
+        return Ok(await _cacheRefreshService.GetCategoriesAsync(config, cancellationToken).ConfigureAwait(false));
+    }
 
-        return Ok(await service.GetCategoriesAsync(config, cancellationToken).ConfigureAwait(false));
+    [HttpGet("Categories")]
+    public async Task<ActionResult<XtreamCategoryCache>> GetCachedCategories(CancellationToken cancellationToken)
+    {
+        return Ok(await _cacheService.GetCategoryCacheAsync(cancellationToken).ConfigureAwait(false));
     }
 
     [HttpGet("CacheSummary")]
     public async Task<ActionResult<XtreamCacheSummary>> GetCacheSummary(CancellationToken cancellationToken)
     {
-        var cache = new XtreamCacheService(_loggerFactory.CreateLogger<XtreamCacheService>());
-        return Ok(await cache.GetSummaryAsync(cancellationToken).ConfigureAwait(false));
+        return Ok(await _cacheService.GetSummaryAsync(cancellationToken).ConfigureAwait(false));
+    }
+
+    private static bool IsValidRequest(XtreamConnectionRequest? request, out string validationMessage)
+    {
+        if (request is null)
+        {
+            validationMessage = "Connection details are required.";
+            return false;
+        }
+
+        if (!XtreamApiClient.TryNormalizeServerUrl(request.ServerUrl, out _))
+        {
+            validationMessage = "Server URL must be an absolute http or https URL.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password))
+        {
+            validationMessage = "Username and password are required.";
+            return false;
+        }
+
+        validationMessage = string.Empty;
+        return true;
     }
 }
 

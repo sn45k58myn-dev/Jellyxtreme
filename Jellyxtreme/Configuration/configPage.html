@@ -41,6 +41,7 @@
                     </div>
                     <p id="ConnectionStatus" class="fieldDescription"></p>
                     <p id="CacheSummary" class="fieldDescription"></p>
+                    <p id="LastSyncStatus" class="fieldDescription"></p>
 
                     <h2>Live TV</h2>
                     <label class="checkboxContainer">
@@ -48,6 +49,10 @@
                         <span>Enable Live TV cache</span>
                     </label>
                     <p id="LiveCategoryCount" class="fieldDescription">0 selected</p>
+                    <div class="inputContainer">
+                        <button is="emby-button" type="button" class="raised sectionSelectAll" data-target="LiveCategories"><span>Select All</span></button>
+                        <button is="emby-button" type="button" class="raised sectionClearAll" data-target="LiveCategories"><span>Clear All</span></button>
+                    </div>
                     <div id="LiveCategories" class="categoryList"></div>
 
                     <h2>VOD</h2>
@@ -56,6 +61,10 @@
                         <span>Enable VOD cache</span>
                     </label>
                     <p id="VodCategoryCount" class="fieldDescription">0 selected</p>
+                    <div class="inputContainer">
+                        <button is="emby-button" type="button" class="raised sectionSelectAll" data-target="VodCategories"><span>Select All</span></button>
+                        <button is="emby-button" type="button" class="raised sectionClearAll" data-target="VodCategories"><span>Clear All</span></button>
+                    </div>
                     <div id="VodCategories" class="categoryList"></div>
 
                     <h2>Series</h2>
@@ -64,6 +73,10 @@
                         <span>Enable Series cache</span>
                     </label>
                     <p id="SeriesCategoryCount" class="fieldDescription">0 selected</p>
+                    <div class="inputContainer">
+                        <button is="emby-button" type="button" class="raised sectionSelectAll" data-target="SeriesCategories"><span>Select All</span></button>
+                        <button is="emby-button" type="button" class="raised sectionClearAll" data-target="SeriesCategories"><span>Clear All</span></button>
+                    </div>
                     <div id="SeriesCategories" class="categoryList"></div>
 
                     <button is="emby-button" type="submit" class="raised button-submit block">
@@ -114,6 +127,16 @@
                     });
                 }
 
+                function hasConnectionDetails() {
+                    return value('#ServerUrl').trim() && value('#Username').trim() && value('#Password').trim();
+                }
+
+                function updateConnectionButtons() {
+                    var disabled = !hasConnectionDetails();
+                    page().querySelector('#TestConnectionButton').disabled = disabled;
+                    page().querySelector('#RefreshCategoriesButton').disabled = disabled;
+                }
+
                 function selectedCategoryIds(containerId) {
                     return Array.prototype.slice.call(page().querySelectorAll('#' + containerId + ' input[type="checkbox"]:checked'))
                         .map(function (input) {
@@ -133,9 +156,26 @@
                         var vod = summary.VodItemCount || summary.vodItemCount || 0;
                         var series = summary.SeriesItemCount || summary.seriesItemCount || 0;
                         var episodes = summary.EpisodeItemCount || summary.episodeItemCount || 0;
-                        page().querySelector('#CacheSummary').textContent = live + ' live channels, ' + vod + ' VOD items, ' + series + ' series, ' + episodes + ' episodes cached';
+                        var total = live + vod + series + episodes;
+                        page().querySelector('#CacheSummary').textContent = total === 0
+                            ? 'Cache empty'
+                            : live + ' live channels, ' + vod + ' VOD items, ' + series + ' series, ' + episodes + ' episodes cached';
+
+                        var sync = summary.LastSuccessfulSyncUtc || summary.lastSuccessfulSyncUtc || summary.RefreshedAt || summary.refreshedAt;
+                        page().querySelector('#LastSyncStatus').textContent = sync ? 'Last sync: ' + new Date(sync).toLocaleString() : 'Last sync: never';
                     }).catch(function () {
                         page().querySelector('#CacheSummary').textContent = '';
+                        page().querySelector('#LastSyncStatus').textContent = '';
+                    });
+                }
+
+                function loadCachedCategories() {
+                    return getJson('Jellyxtreme/Categories').then(function (snapshot) {
+                        renderCategoryList('LiveCategories', snapshot.Live || snapshot.live, currentConfig.SelectedLiveCategoryIds);
+                        renderCategoryList('VodCategories', snapshot.Vod || snapshot.vod, currentConfig.SelectedVodCategoryIds);
+                        renderCategoryList('SeriesCategories', snapshot.Series || snapshot.series, currentConfig.SelectedSeriesCategoryIds);
+                    }).catch(function () {
+                        updateSelectedCounts();
                     });
                 }
 
@@ -185,7 +225,9 @@
                         page().querySelector('#SyncIntervalHours').value = currentConfig.SyncIntervalHours || 12;
                         page().querySelector('#CacheMinutes').value = currentConfig.CacheMinutes || 60;
                         Dashboard.hideLoadingMsg();
+                        updateConnectionButtons();
                         updateSelectedCounts();
+                        loadCachedCategories();
                         loadCacheSummary();
                     });
                 }
@@ -196,6 +238,7 @@
                         renderCategoryList('LiveCategories', snapshot.Live || snapshot.live, currentConfig.SelectedLiveCategoryIds);
                         renderCategoryList('VodCategories', snapshot.Vod || snapshot.vod, currentConfig.SelectedVodCategoryIds);
                         renderCategoryList('SeriesCategories', snapshot.Series || snapshot.series, currentConfig.SelectedSeriesCategoryIds);
+                        page().querySelector('#ConnectionStatus').textContent = 'Categories loaded.';
                         Dashboard.hideLoadingMsg();
                     }).catch(function () {
                         Dashboard.hideLoadingMsg();
@@ -207,10 +250,32 @@
                     loadConfig();
                 });
 
+                ['#ServerUrl', '#Username', '#Password'].forEach(function (selector) {
+                    document.getElementById('JellyxtremeConfigPage').querySelector(selector).addEventListener('input', updateConnectionButtons);
+                });
+
+                Array.prototype.slice.call(document.getElementById('JellyxtremeConfigPage').querySelectorAll('.sectionSelectAll')).forEach(function (button) {
+                    button.addEventListener('click', function () {
+                        Array.prototype.slice.call(page().querySelectorAll('#' + button.getAttribute('data-target') + ' input[type="checkbox"]')).forEach(function (input) {
+                            input.checked = true;
+                        });
+                        updateSelectedCounts();
+                    });
+                });
+
+                Array.prototype.slice.call(document.getElementById('JellyxtremeConfigPage').querySelectorAll('.sectionClearAll')).forEach(function (button) {
+                    button.addEventListener('click', function () {
+                        Array.prototype.slice.call(page().querySelectorAll('#' + button.getAttribute('data-target') + ' input[type="checkbox"]')).forEach(function (input) {
+                            input.checked = false;
+                        });
+                        updateSelectedCounts();
+                    });
+                });
+
                 document.getElementById('TestConnectionButton').addEventListener('click', function () {
                     Dashboard.showLoadingMsg();
                     postJson('Jellyxtreme/TestConnection', connectionPayload()).then(function (result) {
-                        page().querySelector('#ConnectionStatus').textContent = result.Message || result.message || '';
+                        page().querySelector('#ConnectionStatus').textContent = result.IsSuccess || result.isSuccess ? 'Connection successful.' : (result.Message || result.message || 'Connection failed.');
                         Dashboard.hideLoadingMsg();
                     }).catch(function () {
                         page().querySelector('#ConnectionStatus').textContent = 'Connection failed.';

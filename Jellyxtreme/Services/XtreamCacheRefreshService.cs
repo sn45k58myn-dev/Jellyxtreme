@@ -38,6 +38,7 @@ public sealed class XtreamCacheRefreshService
 
         var client = CreateClient(config);
         var document = new XtreamCacheDocument { RefreshedAt = DateTimeOffset.UtcNow };
+        string? xmlTv = null;
 
         var liveCategories = await client.GetLiveCategoriesAsync(cancellationToken).ConfigureAwait(false);
         var vodCategories = await client.GetVodCategoriesAsync(cancellationToken).ConfigureAwait(false);
@@ -48,40 +49,71 @@ public sealed class XtreamCacheRefreshService
         document.SeriesCategories = ToCachedCategories(seriesCategories, "series");
         progress?.Report(15);
 
-        if (config.EnableLiveTv && config.SelectedLiveCategoryIds.Length > 0)
+        var skippedSections = new List<string>();
+
+        if (XtreamSelectionFilter.ShouldCacheSection(config.EnableLiveTv, config.SelectedLiveCategoryIds))
         {
             document.LiveChannels = await RefreshLiveAsync(client, config, document.LiveCategories, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                xmlTv = await client.GetXmlTvAsync(cancellationToken).ConfigureAwait(false);
+                document.XmlTv = new XmlTvCacheInfo
+                {
+                    RefreshedAt = DateTimeOffset.UtcNow,
+                    ChannelReferenceCount = CountXmlTvChannelReferences(xmlTv, document.LiveChannels)
+                };
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Xml.XmlException)
+            {
+                _logger.LogWarning(ex, "JellyXtreme XMLTV cache skipped after a fetch or parse failure.");
+            }
         }
         else
         {
+            skippedSections.Add("Live TV");
             _logger.LogInformation("JellyXtreme Live TV cache skipped because it is disabled or no Live TV categories are selected.");
         }
 
         progress?.Report(45);
 
-        if (config.EnableVod && config.SelectedVodCategoryIds.Length > 0)
+        if (XtreamSelectionFilter.ShouldCacheSection(config.EnableVod, config.SelectedVodCategoryIds))
         {
             document.VodItems = await RefreshVodAsync(client, config, cancellationToken).ConfigureAwait(false);
         }
         else
         {
+            skippedSections.Add("VOD");
             _logger.LogInformation("JellyXtreme VOD cache skipped because it is disabled or no VOD categories are selected.");
         }
 
         progress?.Report(70);
 
-        if (config.EnableSeries && config.SelectedSeriesCategoryIds.Length > 0)
+        if (XtreamSelectionFilter.ShouldCacheSection(config.EnableSeries, config.SelectedSeriesCategoryIds))
         {
             document.SeriesItems = await RefreshSeriesAsync(client, config, cancellationToken).ConfigureAwait(false);
         }
         else
         {
+            skippedSections.Add("Series");
             _logger.LogInformation("JellyXtreme Series cache skipped because it is disabled or no Series categories are selected.");
         }
 
         progress?.Report(95);
-        config.LastSuccessfulSyncUtc = document.RefreshedAt;
+        if (document.XmlTv is not null && xmlTv is not null)
+        {
+            await _cacheService.SaveXmlTvAsync(xmlTv, cancellationToken).ConfigureAwait(false);
+        }
+
         await _cacheService.SaveAsync(document, cancellationToken).ConfigureAwait(false);
+        config.LastSuccessfulSyncUtc = document.RefreshedAt;
+        Plugin.Instance?.SaveConfiguration();
+        _logger.LogInformation(
+            "JellyXtreme refresh imported {LiveCount} live channels, {VodCount} VOD items, {SeriesCount} series, and {EpisodeCount} episodes. Skipped sections: {SkippedSections}.",
+            document.LiveChannels.Count,
+            document.VodItems.Count,
+            document.SeriesItems.Count,
+            document.SeriesItems.Sum(series => series.Seasons.Sum(season => season.Episodes.Count)),
+            skippedSections.Count == 0 ? "none" : string.Join(", ", skippedSections));
         progress?.Report(100);
         return document;
     }
@@ -211,6 +243,21 @@ public sealed class XtreamCacheRefreshService
         }
 
         return cached;
+    }
+
+    private static int CountXmlTvChannelReferences(string xmlTv, IReadOnlyCollection<CachedLiveChannel> channels)
+    {
+        if (string.IsNullOrWhiteSpace(xmlTv) || channels.Count == 0)
+        {
+            return 0;
+        }
+
+        var epgIds = channels
+            .Select(channel => channel.EpgChannelId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return epgIds.Count(id => xmlTv.Contains($"id=\"{id}\"", StringComparison.OrdinalIgnoreCase));
     }
 
     private static List<CachedSeason> ToCachedSeasons(XtreamSeriesInfoResponse? info)

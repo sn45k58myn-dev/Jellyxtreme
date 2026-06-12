@@ -7,15 +7,13 @@ namespace Jellyxtreme.Tasks;
 
 public sealed class XtreamSyncTask : IScheduledTask
 {
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ILoggerFactory _loggerFactory;
+    private readonly XtreamCacheRefreshService _cacheRefreshService;
     private readonly ILogger<XtreamSyncTask> _logger;
 
-    public XtreamSyncTask(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory)
+    public XtreamSyncTask(XtreamCacheRefreshService cacheRefreshService, ILogger<XtreamSyncTask> logger)
     {
-        _httpClientFactory = httpClientFactory;
-        _loggerFactory = loggerFactory;
-        _logger = loggerFactory.CreateLogger<XtreamSyncTask>();
+        _cacheRefreshService = cacheRefreshService;
+        _logger = logger;
     }
 
     public string Name => "JellyXtreme: Refresh Xtream Cache";
@@ -45,12 +43,7 @@ public sealed class XtreamSyncTask : IScheduledTask
             return;
         }
 
-        var service = new XtreamCacheRefreshService(
-            _httpClientFactory,
-            new XtreamCacheService(_loggerFactory.CreateLogger<XtreamCacheService>()),
-            _loggerFactory);
-
-        var document = await service.RefreshAsync(config, progress, cancellationToken).ConfigureAwait(false);
+        var document = await _cacheRefreshService.RefreshAsync(config, progress, cancellationToken).ConfigureAwait(false);
         _logger.LogInformation(
             "JellyXtreme cache refresh complete. Live: {LiveCount}; VOD: {VodCount}; Series: {SeriesCount}; Episodes: {EpisodeCount}.",
             document.LiveChannels.Count,

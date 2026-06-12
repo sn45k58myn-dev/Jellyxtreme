@@ -9,6 +9,7 @@ public sealed class XtreamCacheDocument
     public List<CachedLiveChannel> LiveChannels { get; set; } = [];
     public List<CachedVodItem> VodItems { get; set; } = [];
     public List<CachedSeriesItem> SeriesItems { get; set; } = [];
+    public XmlTvCacheInfo? XmlTv { get; set; }
 }
 
 public sealed class CachedCategory
@@ -70,10 +71,24 @@ public sealed class CachedEpisodeItem
 
 public sealed record XtreamCacheSummary(
     DateTimeOffset? RefreshedAt,
+    DateTimeOffset? LastSuccessfulSyncUtc,
     int LiveCategoryCount,
     int VodCategoryCount,
     int SeriesCategoryCount,
     int LiveChannelCount,
     int VodItemCount,
     int SeriesItemCount,
-    int EpisodeItemCount);
+    int EpisodeItemCount,
+    bool HasXmlTv);
+
+public sealed record XtreamCategoryCache(
+    IReadOnlyList<CachedCategory> Live,
+    IReadOnlyList<CachedCategory> Vod,
+    IReadOnlyList<CachedCategory> Series);
+
+public sealed class XmlTvCacheInfo
+{
+    public DateTimeOffset RefreshedAt { get; set; }
+    public string FileName { get; set; } = "xmltv.xml";
+    public int ChannelReferenceCount { get; set; }
+}

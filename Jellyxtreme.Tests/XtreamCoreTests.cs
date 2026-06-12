@@ -52,6 +52,14 @@ public sealed class XtreamCoreTests
     }
 
     [Fact]
+    public void NoSelectedCategoriesDisablesSectionCaching()
+    {
+        Assert.False(XtreamSelectionFilter.ShouldCacheSection(true, []));
+        Assert.False(XtreamSelectionFilter.ShouldCacheSection(false, ["10"]));
+        Assert.True(XtreamSelectionFilter.ShouldCacheSection(true, ["10"]));
+    }
+
+    [Fact]
     public void StreamUrlsAreResolvedAtPlaybackTime()
     {
         var client = new XtreamApiClient(
@@ -64,6 +72,22 @@ public sealed class XtreamCoreTests
         Assert.Equal("https://provider.example/live/user%20name/pass%20word/123.ts", client.GetLiveStreamUrl(123));
         Assert.Equal("https://provider.example/movie/user%20name/pass%20word/456.mkv", client.GetVodStreamUrl(456, "mkv"));
         Assert.Equal("https://provider.example/series/user%20name/pass%20word/789.mp4", client.GetSeriesStreamUrl(789));
+    }
+
+    [Fact]
+    public void StreamResolverBuildsExpectedPlaybackPaths()
+    {
+        var resolver = new StreamResolverService(new TestHttpClientFactory(), NullLoggerFactory.Instance);
+        var config = new PluginConfiguration
+        {
+            ServerUrl = "https://provider.example",
+            Username = "user",
+            Password = "secret"
+        };
+
+        Assert.Equal("https://provider.example/live/user/secret/1.ts", resolver.ResolveLiveUrl(config, 1));
+        Assert.Equal("https://provider.example/movie/user/secret/2.mkv", resolver.ResolveVodUrl(config, 2, "mkv"));
+        Assert.Equal("https://provider.example/series/user/secret/3.mp4", resolver.ResolveEpisodeUrl(config, 3));
     }
 
     private sealed class TestHttpClientFactory : IHttpClientFactory

@@ -1,12 +1,13 @@
 # Jellyxtreme
 
-Jellyxtreme is a Jellyfin plugin for connecting to authorised Xtream-compatible providers. The plugin is being refactored toward a native Jellyfin provider/cache architecture for Jellyfin 10.11.x and .NET 8.
+Jellyxtreme is a Jellyfin plugin for connecting to authorised Xtream-compatible providers. The plugin uses a selectable provider/cache architecture for Jellyfin 10.11.x and .NET 8.
 
 Jellyxtreme now caches only explicitly selected import sections and categories:
 
 - **Live TV:** selected Xtream live categories are cached as channel metadata with stream IDs, logos, EPG IDs, and group names.
 - **VOD:** selected VOD categories are cached as movie metadata with posters, ratings, container extensions, and added dates.
 - **Series:** selected series categories are cached with series metadata, seasons, episodes, episode stream IDs, and container extensions.
+- **XMLTV:** guide data is cached under the Jellyfin plugin data folder when Live TV is enabled and categories are selected.
 
 Default mode does not generate `.strm` files or `.m3u` playlists.
 
@@ -59,11 +60,15 @@ If no categories are selected, Jellyxtreme imports nothing. If only one section 
 - `Services/XtreamCacheRefreshService.cs` refreshes selected categories only.
 - `Services/StreamResolverService.cs` resolves authenticated Xtream URLs only at playback time.
 - `Providers/` contains Live TV, VOD, and Series provider foundations over the cache.
+- `Controllers/JellyxtremeController.cs` exposes the authenticated admin endpoints used by the config page: test connection, categories, and cache summary.
+- `PluginServiceRegistrator.cs` registers the cache, refresh, resolver, and provider services with Jellyfin dependency injection.
 - `Configuration/configPage.html` is the embedded admin page.
 - `Tasks/XtreamSyncTask.cs` exposes the manual scheduled cache refresh task.
-- `Jellyxtreme.Tests/` covers URL building, category filtering, credential redaction, and config defaults.
+- `Jellyxtreme.Tests/` covers URL building, category filtering, section cache policy, credential redaction, resolver paths, and config defaults.
 
 Sensitive values are kept out of logs. Server URLs are validated as absolute `http` or `https` URLs, and authenticated stream URLs are resolved only when playback/provider code requests them.
+
+The current Jellyfin package line exposes only a narrow Live TV tuner validation interface to plugins. Jellyxtreme therefore ships the cached Live TV provider and playback-time stream resolver foundation now; deeper native tuner/channel registration can be completed when the Jellyfin 10.11 plugin API exposes the needed channel streaming contracts to third-party plugins.
 
 ## Roadmap
 
