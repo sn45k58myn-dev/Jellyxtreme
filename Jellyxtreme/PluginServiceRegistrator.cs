@@ -1,4 +1,5 @@
 using Jellyxtreme.Cache;
+using Jellyxtreme.Controllers;
 using Jellyxtreme.Providers;
 using Jellyxtreme.Services;
 using MediaBrowser.Controller;
@@ -17,5 +18,6 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<XtreamLiveTvProvider>();
         serviceCollection.AddSingleton<XtreamVodProvider>();
         serviceCollection.AddSingleton<XtreamSeriesProvider>();
+        serviceCollection.AddTransient<JellyxtremeApiController>();
     }
 }

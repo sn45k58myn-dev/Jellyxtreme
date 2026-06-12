@@ -11,14 +11,14 @@ namespace Jellyxtreme.Controllers;
 [ApiController]
 [Authorize]
 [Route("Jellyxtreme")]
-public sealed class JellyxtremeController : ControllerBase
+public sealed class JellyxtremeApiController : ControllerBase
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly XtreamCacheRefreshService _cacheRefreshService;
     private readonly XtreamCacheService _cacheService;
     private readonly ILogger<XtreamApiClient> _apiLogger;
 
-    public JellyxtremeController(
+    public JellyxtremeApiController(
         IHttpClientFactory httpClientFactory,
         XtreamCacheRefreshService cacheRefreshService,
         XtreamCacheService cacheService,
