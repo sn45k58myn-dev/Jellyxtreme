@@ -86,6 +86,26 @@ public sealed record XtreamCategoryCache(
     IReadOnlyList<CachedCategory> Vod,
     IReadOnlyList<CachedCategory> Series);
 
+public sealed record XmlTvChannelMap(
+    string EpgChannelId,
+    string XmlTvChannelId,
+    string? DisplayName);
+
+public sealed record CachedXmlTvProgram(
+    string Id,
+    string XmlTvChannelId,
+    string Title,
+    string? Description,
+    DateTimeOffset StartUtc,
+    DateTimeOffset EndUtc,
+    IReadOnlyList<string> Categories,
+    string? EpisodeTitle,
+    string? IconUrl);
+
+public sealed record XmlTvGuideData(
+    IReadOnlyList<XmlTvChannelMap> Channels,
+    IReadOnlyList<CachedXmlTvProgram> Programs);
+
 public sealed class XmlTvCacheInfo
 {
     public DateTimeOffset RefreshedAt { get; set; }

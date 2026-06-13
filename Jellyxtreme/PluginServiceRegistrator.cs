@@ -16,6 +16,7 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
     {
         serviceCollection.AddSingleton<XtreamApiClient>();
         serviceCollection.AddSingleton<XtreamCacheService>();
+        serviceCollection.AddSingleton<XmlTvCacheService>();
         serviceCollection.AddSingleton<XtreamCacheRefreshService>();
         serviceCollection.AddSingleton<StreamResolverService>();
         serviceCollection.AddSingleton<XtreamLiveTvProvider>();

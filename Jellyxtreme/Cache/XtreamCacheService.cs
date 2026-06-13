@@ -46,13 +46,6 @@ public sealed class XtreamCacheService
             document.SeriesItems.Count);
     }
 
-    public async Task SaveXmlTvAsync(string xmlTv, CancellationToken cancellationToken)
-    {
-        var path = GetXmlTvPath();
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllTextAsync(path, xmlTv, cancellationToken).ConfigureAwait(false);
-    }
-
     public async Task<XtreamCacheSummary> GetSummaryAsync(CancellationToken cancellationToken)
     {
         var document = await LoadAsync(cancellationToken).ConfigureAwait(false);
@@ -78,7 +71,7 @@ public sealed class XtreamCacheService
     private string GetCachePath()
         => Path.Combine(GetCacheDirectory(), "xtream-cache.json");
 
-    private string GetXmlTvPath()
+    public string GetXmlTvPath()
         => Path.Combine(GetCacheDirectory(), "xmltv.xml");
 
     private string GetCacheDirectory()

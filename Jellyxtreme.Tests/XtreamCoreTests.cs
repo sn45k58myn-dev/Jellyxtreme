@@ -118,8 +118,10 @@ public sealed class XtreamCoreTests
         }, CancellationToken.None);
 
         var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
+        var xmlTvCache = new XmlTvCacheService(apiClient, cache, NullLogger<XmlTvCacheService>.Instance);
         var provider = new JellyfinLiveTvProvider(
             cache,
+            xmlTvCache,
             new StreamResolverService(apiClient),
             () => new PluginConfiguration
             {
@@ -140,6 +142,65 @@ public sealed class XtreamCoreTests
         Assert.Contains("category:7", channels[0].Tags);
         Assert.Single(mediaSources);
         Assert.Equal("https://provider.example/live/user/secret/42.ts", mediaSources[0].Path);
+    }
+
+    [Fact]
+    public async Task XmlTvCacheMapsProgramsToCachedChannelEpgIds()
+    {
+        var xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <tv>
+              <channel id="news.example">
+                <display-name>News HD</display-name>
+              </channel>
+              <programme start="20260613090000 +0000" stop="20260613100000 +0000" channel="news.example">
+                <title>Morning News</title>
+                <sub-title>Headlines</sub-title>
+                <desc>Daily briefing</desc>
+                <category>News</category>
+                <icon src="https://images.example/news.jpg" />
+              </programme>
+              <programme start="20260613090000 +0000" stop="20260613100000 +0000" channel="other.example">
+                <title>Other</title>
+              </programme>
+            </tv>
+            """;
+        var channel = new CachedLiveChannel
+        {
+            Name = "News HD",
+            StreamId = 42,
+            EpgChannelId = "news.example",
+            GroupName = "News",
+            CategoryId = "7"
+        };
+
+        var guide = XmlTvCacheService.Parse(xml, [channel]);
+
+        Assert.Single(guide.Channels);
+        Assert.Single(guide.Programs);
+        Assert.Equal("news.example", guide.Channels[0].XmlTvChannelId);
+        Assert.Equal("Morning News", guide.Programs[0].Title);
+        Assert.Equal("Daily briefing", guide.Programs[0].Description);
+        Assert.Equal("Headlines", guide.Programs[0].EpisodeTitle);
+
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N"));
+        var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
+        var cache = new XtreamCacheService(NullLogger<XtreamCacheService>.Instance, cacheDirectory);
+        var xmlTvCache = new XmlTvCacheService(apiClient, cache, NullLogger<XmlTvCacheService>.Instance);
+        await cache.SaveAsync(new XtreamCacheDocument { LiveChannels = [channel] }, CancellationToken.None);
+        await File.WriteAllTextAsync(cache.GetXmlTvPath(), xml, CancellationToken.None);
+
+        var provider = new JellyfinLiveTvProvider(
+            cache,
+            xmlTvCache,
+            new StreamResolverService(apiClient),
+            () => new PluginConfiguration());
+        var programs = (await provider.GetProgramsAsync("42", new DateTime(2026, 6, 13, 8, 0, 0, DateTimeKind.Utc), new DateTime(2026, 6, 13, 11, 0, 0, DateTimeKind.Utc), CancellationToken.None)).ToList();
+
+        Assert.Single(programs);
+        Assert.Equal("Morning News", programs[0].Name);
+        Assert.Equal("42", programs[0].ChannelId);
+        Assert.True(programs[0].IsNews);
     }
 
     private sealed class TestHttpClientFactory : IHttpClientFactory

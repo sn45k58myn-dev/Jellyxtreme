@@ -13,20 +13,26 @@ public sealed class JellyfinLiveTvProvider : ITunerHost, IConfigurableTunerHost
 {
     private const string ProviderType = "jellyxtreme";
     private readonly XtreamCacheService _cacheService;
+    private readonly XmlTvCacheService _xmlTvCacheService;
     private readonly StreamResolverService _streamResolver;
     private readonly Func<PluginConfiguration> _configProvider;
 
-    public JellyfinLiveTvProvider(XtreamCacheService cacheService, StreamResolverService streamResolver)
-        : this(cacheService, streamResolver, () => Plugin.Instance?.Configuration ?? new PluginConfiguration())
+    public JellyfinLiveTvProvider(
+        XtreamCacheService cacheService,
+        XmlTvCacheService xmlTvCacheService,
+        StreamResolverService streamResolver)
+        : this(cacheService, xmlTvCacheService, streamResolver, () => Plugin.Instance?.Configuration ?? new PluginConfiguration())
     {
     }
 
     public JellyfinLiveTvProvider(
         XtreamCacheService cacheService,
+        XmlTvCacheService xmlTvCacheService,
         StreamResolverService streamResolver,
         Func<PluginConfiguration> configProvider)
     {
         _cacheService = cacheService;
+        _xmlTvCacheService = xmlTvCacheService;
         _streamResolver = streamResolver;
         _configProvider = configProvider;
     }
@@ -126,6 +132,49 @@ public sealed class JellyfinLiveTvProvider : ITunerHost, IConfigurableTunerHost
         }
 
         return Task.CompletedTask;
+    }
+
+    public async Task<IEnumerable<ProgramInfo>> GetProgramsAsync(
+        string channelId,
+        DateTime startDateUtc,
+        DateTime endDateUtc,
+        CancellationToken cancellationToken)
+    {
+        var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var channel = cache.LiveChannels.FirstOrDefault(item =>
+            string.Equals(item.StreamId.ToString(System.Globalization.CultureInfo.InvariantCulture), channelId, StringComparison.OrdinalIgnoreCase));
+
+        if (channel?.EpgChannelId is null)
+        {
+            return [];
+        }
+
+        var guide = await _xmlTvCacheService.LoadGuideDataAsync(cache.LiveChannels, cancellationToken).ConfigureAwait(false);
+        var start = new DateTimeOffset(DateTime.SpecifyKind(startDateUtc, DateTimeKind.Utc));
+        var end = new DateTimeOffset(DateTime.SpecifyKind(endDateUtc, DateTimeKind.Utc));
+
+        return guide.Programs
+            .Where(program => string.Equals(program.XmlTvChannelId, channel.EpgChannelId, StringComparison.OrdinalIgnoreCase))
+            .Where(program => program.EndUtc > start && program.StartUtc < end)
+            .Select(program => new ProgramInfo
+            {
+                Id = program.Id,
+                ChannelId = channel.StreamId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                Name = program.Title,
+                Overview = program.Description,
+                ShortOverview = program.Description,
+                StartDate = program.StartUtc.UtcDateTime,
+                EndDate = program.EndUtc.UtcDateTime,
+                Genres = program.Categories.ToList(),
+                EpisodeTitle = program.EpisodeTitle,
+                ImageUrl = program.IconUrl,
+                HasImage = !string.IsNullOrWhiteSpace(program.IconUrl),
+                IsLive = program.StartUtc <= DateTimeOffset.UtcNow && program.EndUtc > DateTimeOffset.UtcNow,
+                IsNews = program.Categories.Any(category => category.Contains("news", StringComparison.OrdinalIgnoreCase)),
+                IsSports = program.Categories.Any(category => category.Contains("sport", StringComparison.OrdinalIgnoreCase)),
+                IsKids = program.Categories.Any(category => category.Contains("kids", StringComparison.OrdinalIgnoreCase) || category.Contains("children", StringComparison.OrdinalIgnoreCase))
+            })
+            .ToList();
     }
 
     private async Task<CachedLiveChannel?> GetCachedChannelAsync(string channelId, CancellationToken cancellationToken)

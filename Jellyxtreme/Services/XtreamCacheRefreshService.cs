@@ -9,15 +9,18 @@ public sealed class XtreamCacheRefreshService
 {
     private readonly XtreamApiClient _apiClient;
     private readonly XtreamCacheService _cacheService;
+    private readonly XmlTvCacheService _xmlTvCacheService;
     private readonly ILogger<XtreamCacheRefreshService> _logger;
 
     public XtreamCacheRefreshService(
         XtreamApiClient apiClient,
         XtreamCacheService cacheService,
+        XmlTvCacheService xmlTvCacheService,
         ILogger<XtreamCacheRefreshService> logger)
     {
         _apiClient = apiClient;
         _cacheService = cacheService;
+        _xmlTvCacheService = xmlTvCacheService;
         _logger = logger;
     }
 
@@ -36,7 +39,6 @@ public sealed class XtreamCacheRefreshService
 
         var settings = XtreamConnectionSettings.FromConfig(config);
         var document = new XtreamCacheDocument { RefreshedAt = DateTimeOffset.UtcNow };
-        string? xmlTv = null;
 
         var liveCategories = await _apiClient.GetLiveCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
         var vodCategories = await _apiClient.GetVodCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
@@ -52,19 +54,7 @@ public sealed class XtreamCacheRefreshService
         if (XtreamSelectionFilter.ShouldCacheSection(config.EnableLiveTv, config.SelectedLiveCategoryIds))
         {
             document.LiveChannels = await RefreshLiveAsync(_apiClient, settings, config, document.LiveCategories, cancellationToken).ConfigureAwait(false);
-            try
-            {
-                xmlTv = await _apiClient.GetXmlTvAsync(settings, cancellationToken).ConfigureAwait(false);
-                document.XmlTv = new XmlTvCacheInfo
-                {
-                    RefreshedAt = DateTimeOffset.UtcNow,
-                    ChannelReferenceCount = CountXmlTvChannelReferences(xmlTv, document.LiveChannels)
-                };
-            }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Xml.XmlException)
-            {
-                _logger.LogWarning(ex, "JellyXtreme XMLTV cache skipped after a fetch or parse failure.");
-            }
+            document.XmlTv = await _xmlTvCacheService.DownloadAndCacheAsync(settings, document.LiveChannels, cancellationToken).ConfigureAwait(false);
         }
         else
         {
@@ -97,11 +87,6 @@ public sealed class XtreamCacheRefreshService
         }
 
         progress?.Report(95);
-        if (document.XmlTv is not null && xmlTv is not null)
-        {
-            await _cacheService.SaveXmlTvAsync(xmlTv, cancellationToken).ConfigureAwait(false);
-        }
-
         await _cacheService.SaveAsync(document, cancellationToken).ConfigureAwait(false);
         config.LastSuccessfulSyncUtc = document.RefreshedAt;
         Plugin.Instance?.SaveConfiguration();
@@ -235,21 +220,6 @@ public sealed class XtreamCacheRefreshService
         }
 
         return cached;
-    }
-
-    private static int CountXmlTvChannelReferences(string xmlTv, IReadOnlyCollection<CachedLiveChannel> channels)
-    {
-        if (string.IsNullOrWhiteSpace(xmlTv) || channels.Count == 0)
-        {
-            return 0;
-        }
-
-        var epgIds = channels
-            .Select(channel => channel.EpgChannelId)
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        return epgIds.Count(id => xmlTv.Contains($"id=\"{id}\"", StringComparison.OrdinalIgnoreCase));
     }
 
     private static List<CachedSeason> ToCachedSeasons(XtreamSeriesInfoResponse? info)
