@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -26,14 +27,25 @@ public sealed class XtreamApiClient
     {
         serverUri = null!;
 
-        if (string.IsNullOrWhiteSpace(serverUrl)
-            || !Uri.TryCreate(serverUrl.Trim().TrimEnd('/'), UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        if (string.IsNullOrWhiteSpace(serverUrl))
         {
             return false;
         }
 
-        serverUri = uri;
+        var candidate = serverUrl.Trim();
+        if (!candidate.Contains("://", StringComparison.Ordinal))
+        {
+            candidate = "http://" + candidate;
+        }
+
+        if (!Uri.TryCreate(candidate.TrimEnd('/'), UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            || !IsLikelyServerHost(uri.Host))
+        {
+            return false;
+        }
+
+        serverUri = NormalizeXtreamBaseUri(uri);
         return true;
     }
 
@@ -50,7 +62,7 @@ public sealed class XtreamApiClient
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException)
         {
             _logger.LogWarning("Xtream connection test failed for {ServerUrl}: {Error}", Redact(settings.ServerUrl), Redact(ex.Message));
-            return new XtreamConnectionResult(false, "Connection failed. Check the server URL and credentials.");
+            return new XtreamConnectionResult(false, GetSafeConnectionFailureMessage(ex));
         }
     }
 
@@ -128,6 +140,35 @@ public sealed class XtreamApiClient
 
         return new Uri(serverUri, $"xmltv.php?username={Uri.EscapeDataString(settings.Username)}&password={Uri.EscapeDataString(settings.Password)}");
     }
+
+    private static Uri NormalizeXtreamBaseUri(Uri uri)
+    {
+        var path = uri.AbsolutePath.Trim('/');
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return new UriBuilder(uri) { Path = string.Empty, Query = string.Empty, Fragment = string.Empty }.Uri;
+        }
+
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var endpointIndex = Array.FindIndex(segments, segment =>
+            string.Equals(segment, "player_api.php", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(segment, "get.php", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(segment, "xmltv.php", StringComparison.OrdinalIgnoreCase));
+
+        if (endpointIndex < 0)
+        {
+            return new UriBuilder(uri) { Query = string.Empty, Fragment = string.Empty }.Uri;
+        }
+
+        var basePath = endpointIndex == 0 ? string.Empty : string.Join("/", segments.Take(endpointIndex));
+        return new UriBuilder(uri) { Path = basePath, Query = string.Empty, Fragment = string.Empty }.Uri;
+    }
+
+    private static bool IsLikelyServerHost(string host)
+        => !string.IsNullOrWhiteSpace(host)
+            && (host.Contains('.', StringComparison.Ordinal)
+                || string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+                || IPAddress.TryParse(host, out _));
 
     private static string BuildStreamUrl(XtreamConnectionSettings settings, string type, int streamId, string extension, string operation)
     {
@@ -237,6 +278,17 @@ public sealed class XtreamApiClient
     private static bool IsTransient(Exception exception, CancellationToken cancellationToken)
         => exception is HttpRequestException
             || exception is TaskCanceledException && !cancellationToken.IsCancellationRequested;
+
+    private static string GetSafeConnectionFailureMessage(Exception exception)
+        => exception switch
+        {
+            TaskCanceledException => "Connection timed out. Check the server URL and port.",
+            JsonException => "The server responded, but not with a valid Xtream JSON response. Check that this is an Xtream player API endpoint.",
+            XtreamValidationException validationException => validationException.Message,
+            HttpRequestException httpRequestException when httpRequestException.StatusCode is not null => $"Connection failed with HTTP {(int)httpRequestException.StatusCode}. Check the server URL and credentials.",
+            HttpRequestException => "Connection failed before authentication. Check the server URL, DNS, port, and network access.",
+            _ => "Connection failed. Check the server URL and credentials."
+        };
 
     private static bool IsStreamSegment(string value)
         => string.Equals(value, "live", StringComparison.OrdinalIgnoreCase)

@@ -61,11 +61,25 @@ public sealed class XtreamCoreTests
     [Theory]
     [InlineData("http://example.com", true)]
     [InlineData("https://example.com:8080", true)]
+    [InlineData("example.com:8080", true)]
+    [InlineData("https://example.com/player_api.php?username=user&password=secret", true)]
+    [InlineData("http://example.com:8080/get.php?username=user&password=secret&type=m3u", true)]
     [InlineData("ftp://example.com", false)]
     [InlineData("not-a-url", false)]
     public void ServerUrlValidationAllowsOnlyHttpAndHttps(string url, bool expected)
     {
         Assert.Equal(expected, XtreamApiClient.TryNormalizeServerUrl(url, out _));
+    }
+
+    [Theory]
+    [InlineData("example.com:8080", "http://example.com:8080")]
+    [InlineData("https://example.com/player_api.php?username=user&password=secret", "https://example.com")]
+    [InlineData("http://example.com:8080/get.php?username=user&password=secret&type=m3u", "http://example.com:8080")]
+    [InlineData("https://example.com/iptv/player_api.php", "https://example.com/iptv")]
+    public void ServerUrlNormalizationHandlesCommonXtreamInputs(string input, string expected)
+    {
+        Assert.True(XtreamApiClient.TryNormalizeServerUrl(input, out var uri));
+        Assert.Equal(expected, uri.AbsoluteUri.TrimEnd('/'));
     }
 
     [Fact]

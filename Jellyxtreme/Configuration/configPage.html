@@ -118,6 +118,39 @@
                     };
                 }
 
+                function isLikelyServerUrl(serverUrl) {
+                    var candidate = (serverUrl || '').trim();
+                    if (!candidate) {
+                        return false;
+                    }
+
+                    if (candidate.indexOf('://') === -1) {
+                        candidate = 'http://' + candidate;
+                    }
+
+                    try {
+                        var parsed = new URL(candidate);
+                        var host = parsed.hostname || '';
+                        var isIpAddress = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+                        return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+                            && (host.indexOf('.') !== -1 || host.toLowerCase() === 'localhost' || isIpAddress);
+                    } catch (_) {
+                        return false;
+                    }
+                }
+
+                function validateConnectionPayload(payload) {
+                    if (!isLikelyServerUrl(payload.ServerUrl)) {
+                        return 'Server URL must be an absolute http or https URL, or a valid host:port Xtream server address.';
+                    }
+
+                    if (!payload.Username.trim() || !payload.Password.trim()) {
+                        return 'Username and password are required.';
+                    }
+
+                    return '';
+                }
+
                 function postJson(path, payload) {
                     return ApiClient.ajax({
                         type: 'POST',
@@ -132,6 +165,23 @@
                         type: 'GET',
                         url: ApiClient.getUrl(path)
                     });
+                }
+
+                function ajaxErrorMessage(error, fallback) {
+                    if (error && error.responseJSON) {
+                        return error.responseJSON.Message || error.responseJSON.message || fallback;
+                    }
+
+                    if (error && error.responseText) {
+                        try {
+                            var parsed = JSON.parse(error.responseText);
+                            return parsed.Message || parsed.message || fallback;
+                        } catch (_) {
+                            return error.responseText || fallback;
+                        }
+                    }
+
+                    return fallback;
                 }
 
                 function hasConnectionDetails() {
@@ -273,6 +323,12 @@
                 }
 
                 function refreshCategories() {
+                    var validationMessage = validateConnectionPayload(connectionPayload());
+                    if (validationMessage) {
+                        page().querySelector('#ConnectionStatus').textContent = validationMessage;
+                        return Promise.resolve();
+                    }
+
                     Dashboard.showLoadingMsg();
                     return postJson('Jellyxtreme/Categories', connectionPayload()).then(function (snapshot) {
                         renderCategoryList('LiveCategories', snapshot.Live || snapshot.live, currentConfig.SelectedLiveCategoryIds);
@@ -280,9 +336,9 @@
                         renderCategoryList('SeriesCategories', snapshot.Series || snapshot.series, currentConfig.SelectedSeriesCategoryIds);
                         page().querySelector('#ConnectionStatus').textContent = 'Categories loaded.';
                         Dashboard.hideLoadingMsg();
-                    }).catch(function () {
+                    }).catch(function (error) {
                         Dashboard.hideLoadingMsg();
-                        page().querySelector('#ConnectionStatus').textContent = 'Unable to refresh categories.';
+                        page().querySelector('#ConnectionStatus').textContent = ajaxErrorMessage(error, 'Unable to refresh categories.');
                     });
                 }
 
@@ -313,12 +369,19 @@
                 });
 
                 document.getElementById('TestConnectionButton').addEventListener('click', function () {
+                    var payload = connectionPayload();
+                    var validationMessage = validateConnectionPayload(payload);
+                    if (validationMessage) {
+                        page().querySelector('#ConnectionStatus').textContent = validationMessage;
+                        return;
+                    }
+
                     Dashboard.showLoadingMsg();
-                    postJson('Jellyxtreme/TestConnection', connectionPayload()).then(function (result) {
+                    postJson('Jellyxtreme/TestConnection', payload).then(function (result) {
                         page().querySelector('#ConnectionStatus').textContent = result.IsSuccess || result.isSuccess ? 'Connection successful.' : (result.Message || result.message || 'Connection failed.');
                         Dashboard.hideLoadingMsg();
-                    }).catch(function () {
-                        page().querySelector('#ConnectionStatus').textContent = 'Connection failed.';
+                    }).catch(function (error) {
+                        page().querySelector('#ConnectionStatus').textContent = ajaxErrorMessage(error, 'Connection failed.');
                         Dashboard.hideLoadingMsg();
                     });
                 });
