@@ -6,29 +6,19 @@ namespace Jellyxtreme.Services;
 
 public sealed class StreamResolverService
 {
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ILoggerFactory _loggerFactory;
+    private readonly XtreamApiClient _apiClient;
 
-    public StreamResolverService(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory)
+    public StreamResolverService(XtreamApiClient apiClient)
     {
-        _httpClientFactory = httpClientFactory;
-        _loggerFactory = loggerFactory;
+        _apiClient = apiClient;
     }
 
     public string ResolveLiveUrl(PluginConfiguration config, int streamId, string extension = "ts")
-        => CreateClient(config).GetLiveStreamUrl(streamId, extension);
+        => _apiClient.GetLiveStreamUrl(XtreamConnectionSettings.FromConfig(config), streamId, extension);
 
     public string ResolveVodUrl(PluginConfiguration config, int streamId, string extension = "mp4")
-        => CreateClient(config).GetVodStreamUrl(streamId, extension);
+        => _apiClient.GetVodStreamUrl(XtreamConnectionSettings.FromConfig(config), streamId, extension);
 
     public string ResolveEpisodeUrl(PluginConfiguration config, int streamId, string extension = "mp4")
-        => CreateClient(config).GetSeriesStreamUrl(streamId, extension);
-
-    private XtreamApiClient CreateClient(PluginConfiguration config)
-        => new(
-            _httpClientFactory,
-            _loggerFactory.CreateLogger<XtreamApiClient>(),
-            config.ServerUrl,
-            config.Username,
-            config.Password);
+        => _apiClient.GetSeriesStreamUrl(XtreamConnectionSettings.FromConfig(config), streamId, extension);
 }

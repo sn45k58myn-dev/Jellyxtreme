@@ -1,5 +1,6 @@
 using Jellyxtreme.Cache;
 using Jellyxtreme.Controllers;
+using Jellyxtreme.Api;
 using Jellyxtreme.Providers;
 using Jellyxtreme.Services;
 using MediaBrowser.Controller;
@@ -12,6 +13,7 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
 {
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
+        serviceCollection.AddSingleton<XtreamApiClient>();
         serviceCollection.AddSingleton<XtreamCacheService>();
         serviceCollection.AddSingleton<XtreamCacheRefreshService>();
         serviceCollection.AddSingleton<StreamResolverService>();

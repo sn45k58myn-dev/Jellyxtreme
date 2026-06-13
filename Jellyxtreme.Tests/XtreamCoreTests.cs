@@ -64,20 +64,23 @@ public sealed class XtreamCoreTests
     {
         var client = new XtreamApiClient(
             new TestHttpClientFactory(),
-            NullLogger<XtreamApiClient>.Instance,
+            NullLogger<XtreamApiClient>.Instance);
+        var settings = new XtreamConnectionSettings(
             "https://provider.example",
             "user name",
-            "pass word");
+            "pass word",
+            TimeSpan.FromSeconds(30));
 
-        Assert.Equal("https://provider.example/live/user%20name/pass%20word/123.ts", client.GetLiveStreamUrl(123));
-        Assert.Equal("https://provider.example/movie/user%20name/pass%20word/456.mkv", client.GetVodStreamUrl(456, "mkv"));
-        Assert.Equal("https://provider.example/series/user%20name/pass%20word/789.mp4", client.GetSeriesStreamUrl(789));
+        Assert.Equal("https://provider.example/live/user%20name/pass%20word/123.ts", client.GetLiveStreamUrl(settings, 123));
+        Assert.Equal("https://provider.example/movie/user%20name/pass%20word/456.mkv", client.GetVodStreamUrl(settings, 456, "mkv"));
+        Assert.Equal("https://provider.example/series/user%20name/pass%20word/789.mp4", client.GetSeriesStreamUrl(settings, 789));
     }
 
     [Fact]
     public void StreamResolverBuildsExpectedPlaybackPaths()
     {
-        var resolver = new StreamResolverService(new TestHttpClientFactory(), NullLoggerFactory.Instance);
+        var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
+        var resolver = new StreamResolverService(apiClient);
         var config = new PluginConfiguration
         {
             ServerUrl = "https://provider.example",

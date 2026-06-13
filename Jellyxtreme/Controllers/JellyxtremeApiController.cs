@@ -13,21 +13,18 @@ namespace Jellyxtreme.Controllers;
 [Route("Jellyxtreme")]
 public sealed class JellyxtremeApiController : ControllerBase
 {
-    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly XtreamApiClient _apiClient;
     private readonly XtreamCacheRefreshService _cacheRefreshService;
     private readonly XtreamCacheService _cacheService;
-    private readonly ILogger<XtreamApiClient> _apiLogger;
 
     public JellyxtremeApiController(
-        IHttpClientFactory httpClientFactory,
+        XtreamApiClient apiClient,
         XtreamCacheRefreshService cacheRefreshService,
-        XtreamCacheService cacheService,
-        ILogger<XtreamApiClient> apiLogger)
+        XtreamCacheService cacheService)
     {
-        _httpClientFactory = httpClientFactory;
+        _apiClient = apiClient;
         _cacheRefreshService = cacheRefreshService;
         _cacheService = cacheService;
-        _apiLogger = apiLogger;
     }
 
     [HttpPost("TestConnection")]
@@ -40,14 +37,9 @@ public sealed class JellyxtremeApiController : ControllerBase
             return BadRequest(new XtreamConnectionResult(false, validationMessage));
         }
 
-        var client = new XtreamApiClient(
-            _httpClientFactory,
-            _apiLogger,
-            request.ServerUrl,
-            request.Username,
-            request.Password);
-
-        return Ok(await client.TestConnectionAsync(cancellationToken).ConfigureAwait(false));
+        return Ok(await _apiClient.TestConnectionAsync(
+            XtreamConnectionSettings.FromRequest(request.ServerUrl, request.Username, request.Password),
+            cancellationToken).ConfigureAwait(false));
     }
 
     [HttpPost("Categories")]

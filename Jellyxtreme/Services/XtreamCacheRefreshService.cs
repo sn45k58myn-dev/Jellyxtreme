@@ -7,20 +7,18 @@ namespace Jellyxtreme.Services;
 
 public sealed class XtreamCacheRefreshService
 {
-    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly XtreamApiClient _apiClient;
     private readonly XtreamCacheService _cacheService;
-    private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<XtreamCacheRefreshService> _logger;
 
     public XtreamCacheRefreshService(
-        IHttpClientFactory httpClientFactory,
+        XtreamApiClient apiClient,
         XtreamCacheService cacheService,
-        ILoggerFactory loggerFactory)
+        ILogger<XtreamCacheRefreshService> logger)
     {
-        _httpClientFactory = httpClientFactory;
+        _apiClient = apiClient;
         _cacheService = cacheService;
-        _loggerFactory = loggerFactory;
-        _logger = loggerFactory.CreateLogger<XtreamCacheRefreshService>();
+        _logger = logger;
     }
 
     public async Task<XtreamCacheDocument> RefreshAsync(
@@ -36,13 +34,13 @@ public sealed class XtreamCacheRefreshService
             return new XtreamCacheDocument();
         }
 
-        var client = CreateClient(config);
+        var settings = XtreamConnectionSettings.FromConfig(config);
         var document = new XtreamCacheDocument { RefreshedAt = DateTimeOffset.UtcNow };
         string? xmlTv = null;
 
-        var liveCategories = await client.GetLiveCategoriesAsync(cancellationToken).ConfigureAwait(false);
-        var vodCategories = await client.GetVodCategoriesAsync(cancellationToken).ConfigureAwait(false);
-        var seriesCategories = await client.GetSeriesCategoriesAsync(cancellationToken).ConfigureAwait(false);
+        var liveCategories = await _apiClient.GetLiveCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+        var vodCategories = await _apiClient.GetVodCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+        var seriesCategories = await _apiClient.GetSeriesCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
 
         document.LiveCategories = ToCachedCategories(liveCategories, "live");
         document.VodCategories = ToCachedCategories(vodCategories, "vod");
@@ -53,10 +51,10 @@ public sealed class XtreamCacheRefreshService
 
         if (XtreamSelectionFilter.ShouldCacheSection(config.EnableLiveTv, config.SelectedLiveCategoryIds))
         {
-            document.LiveChannels = await RefreshLiveAsync(client, config, document.LiveCategories, cancellationToken).ConfigureAwait(false);
+            document.LiveChannels = await RefreshLiveAsync(_apiClient, settings, config, document.LiveCategories, cancellationToken).ConfigureAwait(false);
             try
             {
-                xmlTv = await client.GetXmlTvAsync(cancellationToken).ConfigureAwait(false);
+                xmlTv = await _apiClient.GetXmlTvAsync(settings, cancellationToken).ConfigureAwait(false);
                 document.XmlTv = new XmlTvCacheInfo
                 {
                     RefreshedAt = DateTimeOffset.UtcNow,
@@ -78,7 +76,7 @@ public sealed class XtreamCacheRefreshService
 
         if (XtreamSelectionFilter.ShouldCacheSection(config.EnableVod, config.SelectedVodCategoryIds))
         {
-            document.VodItems = await RefreshVodAsync(client, config, cancellationToken).ConfigureAwait(false);
+            document.VodItems = await RefreshVodAsync(_apiClient, settings, config, cancellationToken).ConfigureAwait(false);
         }
         else
         {
@@ -90,7 +88,7 @@ public sealed class XtreamCacheRefreshService
 
         if (XtreamSelectionFilter.ShouldCacheSection(config.EnableSeries, config.SelectedSeriesCategoryIds))
         {
-            document.SeriesItems = await RefreshSeriesAsync(client, config, cancellationToken).ConfigureAwait(false);
+            document.SeriesItems = await RefreshSeriesAsync(_apiClient, settings, config, cancellationToken).ConfigureAwait(false);
         }
         else
         {
@@ -125,22 +123,13 @@ public sealed class XtreamCacheRefreshService
             return new XtreamCategorySnapshot([], [], []);
         }
 
-        var client = CreateClient(config);
-        var live = await client.GetLiveCategoriesAsync(cancellationToken).ConfigureAwait(false);
-        var vod = await client.GetVodCategoriesAsync(cancellationToken).ConfigureAwait(false);
-        var series = await client.GetSeriesCategoriesAsync(cancellationToken).ConfigureAwait(false);
+        var settings = XtreamConnectionSettings.FromConfig(config);
+        var live = await _apiClient.GetLiveCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+        var vod = await _apiClient.GetVodCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+        var series = await _apiClient.GetSeriesCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
 
         return new XtreamCategorySnapshot(live, vod, series);
     }
-
-    private XtreamApiClient CreateClient(PluginConfiguration config)
-        => new(
-            _httpClientFactory,
-            _loggerFactory.CreateLogger<XtreamApiClient>(),
-            config.ServerUrl,
-            config.Username,
-            config.Password,
-            TimeSpan.FromMinutes(Math.Max(1, config.CacheMinutes)));
 
     private static bool HasCredentials(PluginConfiguration config)
         => XtreamApiClient.TryNormalizeServerUrl(config.ServerUrl, out _)
@@ -160,12 +149,13 @@ public sealed class XtreamCacheRefreshService
 
     private static async Task<List<CachedLiveChannel>> RefreshLiveAsync(
         XtreamApiClient client,
+        XtreamConnectionSettings settings,
         PluginConfiguration config,
         List<CachedCategory> categories,
         CancellationToken cancellationToken)
     {
         var categoryNames = categories.ToDictionary(category => category.CategoryId, category => category.Name, StringComparer.OrdinalIgnoreCase);
-        var streams = await client.GetLiveStreamsAsync(cancellationToken).ConfigureAwait(false);
+        var streams = await client.GetLiveStreamsAsync(settings, cancellationToken).ConfigureAwait(false);
 
         return streams
             .Where(stream => XtreamSelectionFilter.IsCategorySelected(stream.CategoryId, config.SelectedLiveCategoryIds))
@@ -185,10 +175,11 @@ public sealed class XtreamCacheRefreshService
 
     private static async Task<List<CachedVodItem>> RefreshVodAsync(
         XtreamApiClient client,
+        XtreamConnectionSettings settings,
         PluginConfiguration config,
         CancellationToken cancellationToken)
     {
-        var streams = await client.GetVodStreamsAsync(cancellationToken).ConfigureAwait(false);
+        var streams = await client.GetVodStreamsAsync(settings, cancellationToken).ConfigureAwait(false);
 
         return streams
             .Where(stream => XtreamSelectionFilter.IsCategorySelected(stream.CategoryId, config.SelectedVodCategoryIds))
@@ -208,10 +199,11 @@ public sealed class XtreamCacheRefreshService
 
     private async Task<List<CachedSeriesItem>> RefreshSeriesAsync(
         XtreamApiClient client,
+        XtreamConnectionSettings settings,
         PluginConfiguration config,
         CancellationToken cancellationToken)
     {
-        var seriesList = await client.GetSeriesAsync(cancellationToken).ConfigureAwait(false);
+        var seriesList = await client.GetSeriesAsync(settings, cancellationToken).ConfigureAwait(false);
         var selectedSeries = seriesList
             .Where(series => XtreamSelectionFilter.IsCategorySelected(series.CategoryId, config.SelectedSeriesCategoryIds))
             .Where(series => series.SeriesId > 0 && !string.IsNullOrWhiteSpace(series.Name))
@@ -224,7 +216,7 @@ public sealed class XtreamCacheRefreshService
 
             try
             {
-                var info = await client.GetSeriesInfoAsync(series.SeriesId, cancellationToken).ConfigureAwait(false);
+                var info = await client.GetSeriesInfoAsync(settings, series.SeriesId, cancellationToken).ConfigureAwait(false);
                 cached.Add(new CachedSeriesItem
                 {
                     Name = series.Name!,

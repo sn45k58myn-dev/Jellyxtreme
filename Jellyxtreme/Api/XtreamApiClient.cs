@@ -14,29 +14,11 @@ public sealed class XtreamApiClient
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<XtreamApiClient> _logger;
-    private readonly Uri _serverUri;
-    private readonly string _username;
-    private readonly string _password;
 
-    public XtreamApiClient(
-        IHttpClientFactory httpClientFactory,
-        ILogger<XtreamApiClient> logger,
-        string serverUrl,
-        string username,
-        string password,
-        TimeSpan? timeout = null)
+    public XtreamApiClient(IHttpClientFactory httpClientFactory, ILogger<XtreamApiClient> logger)
     {
-        if (!TryNormalizeServerUrl(serverUrl, out var serverUri))
-        {
-            throw new ArgumentException("ServerUrl must be an absolute http or https URL.", nameof(serverUrl));
-        }
-
         _httpClient = httpClientFactory.CreateClient(nameof(XtreamApiClient));
-        _httpClient.Timeout = timeout ?? TimeSpan.FromSeconds(30);
         _logger = logger;
-        _serverUri = serverUri;
-        _username = username;
-        _password = password;
     }
 
     public static bool TryNormalizeServerUrl(string? serverUrl, out Uri serverUri)
@@ -54,11 +36,11 @@ public sealed class XtreamApiClient
         return true;
     }
 
-    public async Task<XtreamConnectionResult> TestConnectionAsync(CancellationToken cancellationToken)
+    public async Task<XtreamConnectionResult> TestConnectionAsync(XtreamConnectionSettings settings, CancellationToken cancellationToken)
     {
         try
         {
-            var response = await GetFromApiAsync<XtreamAuthenticationResponse>(null, cancellationToken).ConfigureAwait(false);
+            var response = await GetFromApiAsync<XtreamAuthenticationResponse>(settings, null, cancellationToken).ConfigureAwait(false);
             var isAuthenticated = response?.UserInfo?.Auth == 1
                 || string.Equals(response?.UserInfo?.Status, "Active", StringComparison.OrdinalIgnoreCase);
 
@@ -66,65 +48,70 @@ public sealed class XtreamApiClient
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException)
         {
-            _logger.LogWarning(ex, "Xtream connection test failed for {ServerUrl}.", Redact(_serverUri.ToString()));
+            _logger.LogWarning(ex, "Xtream connection test failed for {ServerUrl}.", Redact(settings.ServerUrl));
             return new XtreamConnectionResult(false, "Connection failed. Check the server URL and credentials.");
         }
     }
 
-    public Task<List<XtreamCategory>> GetLiveCategoriesAsync(CancellationToken cancellationToken)
-        => GetListAsync<XtreamCategory>("get_live_categories", cancellationToken);
+    public Task<List<XtreamCategory>> GetLiveCategoriesAsync(XtreamConnectionSettings settings, CancellationToken cancellationToken)
+        => GetListAsync<XtreamCategory>(settings, "get_live_categories", cancellationToken);
 
-    public Task<List<XtreamCategory>> GetVodCategoriesAsync(CancellationToken cancellationToken)
-        => GetListAsync<XtreamCategory>("get_vod_categories", cancellationToken);
+    public Task<List<XtreamCategory>> GetVodCategoriesAsync(XtreamConnectionSettings settings, CancellationToken cancellationToken)
+        => GetListAsync<XtreamCategory>(settings, "get_vod_categories", cancellationToken);
 
-    public Task<List<XtreamCategory>> GetSeriesCategoriesAsync(CancellationToken cancellationToken)
-        => GetListAsync<XtreamCategory>("get_series_categories", cancellationToken);
+    public Task<List<XtreamCategory>> GetSeriesCategoriesAsync(XtreamConnectionSettings settings, CancellationToken cancellationToken)
+        => GetListAsync<XtreamCategory>(settings, "get_series_categories", cancellationToken);
 
-    public Task<List<XtreamLiveStream>> GetLiveStreamsAsync(CancellationToken cancellationToken)
-        => GetListAsync<XtreamLiveStream>("get_live_streams", cancellationToken);
+    public Task<List<XtreamLiveStream>> GetLiveStreamsAsync(XtreamConnectionSettings settings, CancellationToken cancellationToken)
+        => GetListAsync<XtreamLiveStream>(settings, "get_live_streams", cancellationToken);
 
-    public Task<List<XtreamVodStream>> GetVodStreamsAsync(CancellationToken cancellationToken)
-        => GetListAsync<XtreamVodStream>("get_vod_streams", cancellationToken);
+    public Task<List<XtreamVodStream>> GetVodStreamsAsync(XtreamConnectionSettings settings, CancellationToken cancellationToken)
+        => GetListAsync<XtreamVodStream>(settings, "get_vod_streams", cancellationToken);
 
-    public Task<List<XtreamSeries>> GetSeriesAsync(CancellationToken cancellationToken)
-        => GetListAsync<XtreamSeries>("get_series", cancellationToken);
+    public Task<List<XtreamSeries>> GetSeriesAsync(XtreamConnectionSettings settings, CancellationToken cancellationToken)
+        => GetListAsync<XtreamSeries>(settings, "get_series", cancellationToken);
 
-    public async Task<XtreamSeriesInfoResponse?> GetSeriesInfoAsync(int seriesId, CancellationToken cancellationToken)
-        => await GetFromApiAsync<XtreamSeriesInfoResponse>("get_series_info", cancellationToken, ("series_id", seriesId.ToString()))
+    public async Task<XtreamSeriesInfoResponse?> GetSeriesInfoAsync(XtreamConnectionSettings settings, int seriesId, CancellationToken cancellationToken)
+        => await GetFromApiAsync<XtreamSeriesInfoResponse>(settings, "get_series_info", cancellationToken, ("series_id", seriesId.ToString()))
             .ConfigureAwait(false);
 
-    public async Task<string> GetXmlTvAsync(CancellationToken cancellationToken)
+    public async Task<string> GetXmlTvAsync(XtreamConnectionSettings settings, CancellationToken cancellationToken)
     {
-        var uri = BuildXmlTvUri();
-        _logger.LogDebug("Fetching Xtream XMLTV from {ServerUrl}.", Redact(_serverUri.ToString()));
-        return await _httpClient.GetStringAsync(uri, cancellationToken).ConfigureAwait(false);
+        var uri = BuildXmlTvUri(settings);
+        _logger.LogDebug("Fetching Xtream XMLTV from {ServerUrl}.", Redact(settings.ServerUrl));
+        return await ExecuteWithTimeout(settings, token => _httpClient.GetStringAsync(uri, token), cancellationToken).ConfigureAwait(false);
     }
 
-    public string GetLiveStreamUrl(int streamId, string extension = "ts")
-        => BuildStreamUrl("live", streamId, extension);
+    public string GetLiveStreamUrl(XtreamConnectionSettings settings, int streamId, string extension = "ts")
+        => BuildStreamUrl(settings, "live", streamId, extension);
 
-    public string GetVodStreamUrl(int streamId, string extension = "mp4")
-        => BuildStreamUrl("movie", streamId, extension);
+    public string GetVodStreamUrl(XtreamConnectionSettings settings, int streamId, string extension = "mp4")
+        => BuildStreamUrl(settings, "movie", streamId, extension);
 
-    public string GetSeriesStreamUrl(int streamId, string extension = "mp4")
-        => BuildStreamUrl("series", streamId, extension);
+    public string GetSeriesStreamUrl(XtreamConnectionSettings settings, int streamId, string extension = "mp4")
+        => BuildStreamUrl(settings, "series", streamId, extension);
 
-    private async Task<List<T>> GetListAsync<T>(string action, CancellationToken cancellationToken)
-        => await GetFromApiAsync<List<T>>(action, cancellationToken).ConfigureAwait(false) ?? [];
+    private async Task<List<T>> GetListAsync<T>(XtreamConnectionSettings settings, string action, CancellationToken cancellationToken)
+        => await GetFromApiAsync<List<T>>(settings, action, cancellationToken).ConfigureAwait(false) ?? [];
 
-    private async Task<T?> GetFromApiAsync<T>(string? action, CancellationToken cancellationToken, params (string Key, string Value)[] query)
+    private async Task<T?> GetFromApiAsync<T>(XtreamConnectionSettings settings, string? action, CancellationToken cancellationToken, params (string Key, string Value)[] query)
     {
-        var uri = BuildPlayerApiUri(action, query);
-        _logger.LogDebug("Fetching Xtream action {Action} from {ServerUrl}.", action ?? "authenticate", Redact(_serverUri.ToString()));
-        return await _httpClient.GetFromJsonAsync<T>(uri, JsonOptions, cancellationToken).ConfigureAwait(false);
+        var uri = BuildPlayerApiUri(settings, action, query);
+        _logger.LogDebug("Fetching Xtream action {Action} from {ServerUrl}.", action ?? "authenticate", Redact(settings.ServerUrl));
+        return await ExecuteWithTimeout(settings, token => _httpClient.GetFromJsonAsync<T>(uri, JsonOptions, token), cancellationToken).ConfigureAwait(false);
     }
 
-    private Uri BuildPlayerApiUri(string? action, params (string Key, string Value)[] query)
+    private static Uri BuildPlayerApiUri(XtreamConnectionSettings settings, string? action, params (string Key, string Value)[] query)
     {
+        if (!TryNormalizeServerUrl(settings.ServerUrl, out var serverUri))
+        {
+            throw new ArgumentException("ServerUrl must be an absolute http or https URL.", nameof(settings));
+        }
+
         var parameters = new List<string>
         {
-            $"username={Uri.EscapeDataString(_username)}",
-            $"password={Uri.EscapeDataString(_password)}"
+            $"username={Uri.EscapeDataString(settings.Username)}",
+            $"password={Uri.EscapeDataString(settings.Password)}"
         };
 
         if (!string.IsNullOrWhiteSpace(action))
@@ -134,16 +121,38 @@ public sealed class XtreamApiClient
 
         parameters.AddRange(query.Select(item => $"{Uri.EscapeDataString(item.Key)}={Uri.EscapeDataString(item.Value)}"));
 
-        return new Uri(_serverUri, $"player_api.php?{string.Join("&", parameters)}");
+        return new Uri(serverUri, $"player_api.php?{string.Join("&", parameters)}");
     }
 
-    private Uri BuildXmlTvUri()
-        => new(_serverUri, $"xmltv.php?username={Uri.EscapeDataString(_username)}&password={Uri.EscapeDataString(_password)}");
-
-    private string BuildStreamUrl(string type, int streamId, string extension)
+    private static Uri BuildXmlTvUri(XtreamConnectionSettings settings)
     {
+        if (!TryNormalizeServerUrl(settings.ServerUrl, out var serverUri))
+        {
+            throw new ArgumentException("ServerUrl must be an absolute http or https URL.", nameof(settings));
+        }
+
+        return new Uri(serverUri, $"xmltv.php?username={Uri.EscapeDataString(settings.Username)}&password={Uri.EscapeDataString(settings.Password)}");
+    }
+
+    private static string BuildStreamUrl(XtreamConnectionSettings settings, string type, int streamId, string extension)
+    {
+        if (!TryNormalizeServerUrl(settings.ServerUrl, out var serverUri))
+        {
+            throw new ArgumentException("ServerUrl must be an absolute http or https URL.", nameof(settings));
+        }
+
         var safeExtension = string.IsNullOrWhiteSpace(extension) ? "mp4" : extension.TrimStart('.');
-        return new Uri(_serverUri, $"{type}/{Uri.EscapeDataString(_username)}/{Uri.EscapeDataString(_password)}/{streamId}.{safeExtension}").AbsoluteUri;
+        return new Uri(serverUri, $"{type}/{Uri.EscapeDataString(settings.Username)}/{Uri.EscapeDataString(settings.Password)}/{streamId}.{safeExtension}").AbsoluteUri;
+    }
+
+    private static async Task<T> ExecuteWithTimeout<T>(
+        XtreamConnectionSettings settings,
+        Func<CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(settings.Timeout);
+        return await action(timeoutSource.Token).ConfigureAwait(false);
     }
 
     public static string Redact(string value)
@@ -156,6 +165,15 @@ public sealed class XtreamApiClient
         var queryIndex = value.IndexOf('?', StringComparison.Ordinal);
         return queryIndex >= 0 ? value[..queryIndex] + "?redacted=true" : value;
     }
+}
+
+public sealed record XtreamConnectionSettings(string ServerUrl, string Username, string Password, TimeSpan Timeout)
+{
+    public static XtreamConnectionSettings FromConfig(Configuration.PluginConfiguration config)
+        => new(config.ServerUrl, config.Username, config.Password, TimeSpan.FromMinutes(Math.Max(1, config.CacheMinutes)));
+
+    public static XtreamConnectionSettings FromRequest(string serverUrl, string username, string password)
+        => new(serverUrl, username, password, TimeSpan.FromSeconds(30));
 }
 
 public sealed record XtreamConnectionResult(bool IsSuccess, string Message);
