@@ -1,6 +1,5 @@
 using Jellyxtreme.Api;
 using Jellyxtreme.Configuration;
-using Microsoft.Extensions.Logging;
 
 namespace Jellyxtreme.Services;
 

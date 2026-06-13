@@ -83,13 +83,13 @@ public sealed class XtreamApiClient
     }
 
     public string GetLiveStreamUrl(XtreamConnectionSettings settings, int streamId, string extension = "ts")
-        => BuildStreamUrl(settings, "live", streamId, extension);
+        => BuildStreamUrl(settings, "live", streamId, extension, nameof(GetLiveStreamUrl));
 
     public string GetVodStreamUrl(XtreamConnectionSettings settings, int streamId, string extension = "mp4")
-        => BuildStreamUrl(settings, "movie", streamId, extension);
+        => BuildStreamUrl(settings, "movie", streamId, extension, nameof(GetVodStreamUrl));
 
     public string GetSeriesStreamUrl(XtreamConnectionSettings settings, int streamId, string extension = "mp4")
-        => BuildStreamUrl(settings, "series", streamId, extension);
+        => BuildStreamUrl(settings, "series", streamId, extension, nameof(GetSeriesStreamUrl));
 
     private async Task<List<T>> GetListAsync<T>(XtreamConnectionSettings settings, string action, CancellationToken cancellationToken)
         => await GetFromApiAsync<List<T>>(settings, action, cancellationToken).ConfigureAwait(false) ?? [];
@@ -103,10 +103,7 @@ public sealed class XtreamApiClient
 
     private static Uri BuildPlayerApiUri(XtreamConnectionSettings settings, string? action, params (string Key, string Value)[] query)
     {
-        if (!TryNormalizeServerUrl(settings.ServerUrl, out var serverUri))
-        {
-            throw new ArgumentException("ServerUrl must be an absolute http or https URL.", nameof(settings));
-        }
+        var serverUri = ValidateSettings(settings);
 
         var parameters = new List<string>
         {
@@ -126,23 +123,56 @@ public sealed class XtreamApiClient
 
     private static Uri BuildXmlTvUri(XtreamConnectionSettings settings)
     {
-        if (!TryNormalizeServerUrl(settings.ServerUrl, out var serverUri))
-        {
-            throw new ArgumentException("ServerUrl must be an absolute http or https URL.", nameof(settings));
-        }
+        var serverUri = ValidateSettings(settings);
 
         return new Uri(serverUri, $"xmltv.php?username={Uri.EscapeDataString(settings.Username)}&password={Uri.EscapeDataString(settings.Password)}");
     }
 
-    private static string BuildStreamUrl(XtreamConnectionSettings settings, string type, int streamId, string extension)
+    private static string BuildStreamUrl(XtreamConnectionSettings settings, string type, int streamId, string extension, string operation)
+    {
+        var serverUri = ValidateSettings(settings);
+        if (streamId <= 0)
+        {
+            throw new XtreamValidationException("Stream ID must be greater than zero.", operation);
+        }
+
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            throw new XtreamValidationException("Stream extension is required.", operation);
+        }
+
+        var safeExtension = extension.Trim().TrimStart('.');
+        if (string.IsNullOrWhiteSpace(safeExtension))
+        {
+            throw new XtreamValidationException("Stream extension is required.", operation);
+        }
+
+        return new Uri(serverUri, $"{type}/{Uri.EscapeDataString(settings.Username)}/{Uri.EscapeDataString(settings.Password)}/{streamId}.{safeExtension}").AbsoluteUri;
+    }
+
+    private static Uri ValidateSettings(XtreamConnectionSettings settings)
     {
         if (!TryNormalizeServerUrl(settings.ServerUrl, out var serverUri))
         {
-            throw new ArgumentException("ServerUrl must be an absolute http or https URL.", nameof(settings));
+            throw new XtreamValidationException("Server URL must be an absolute http or https URL.", nameof(XtreamConnectionSettings));
         }
 
-        var safeExtension = string.IsNullOrWhiteSpace(extension) ? "mp4" : extension.TrimStart('.');
-        return new Uri(serverUri, $"{type}/{Uri.EscapeDataString(settings.Username)}/{Uri.EscapeDataString(settings.Password)}/{streamId}.{safeExtension}").AbsoluteUri;
+        if (string.IsNullOrWhiteSpace(settings.Username))
+        {
+            throw new XtreamValidationException("Username is required.", nameof(XtreamConnectionSettings));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Password))
+        {
+            throw new XtreamValidationException("Password is required.", nameof(XtreamConnectionSettings));
+        }
+
+        if (settings.Timeout <= TimeSpan.Zero)
+        {
+            throw new XtreamValidationException("Timeout must be greater than zero.", nameof(XtreamConnectionSettings));
+        }
+
+        return serverUri;
     }
 
     private static async Task<T> ExecuteWithTimeout<T>(
@@ -177,6 +207,17 @@ public sealed record XtreamConnectionSettings(string ServerUrl, string Username,
 }
 
 public sealed record XtreamConnectionResult(bool IsSuccess, string Message);
+
+public sealed class XtreamValidationException : InvalidOperationException
+{
+    public XtreamValidationException(string message, string operation)
+        : base(message)
+    {
+        Operation = operation;
+    }
+
+    public string Operation { get; }
+}
 
 public sealed class XtreamAuthenticationResponse
 {

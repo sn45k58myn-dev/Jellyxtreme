@@ -95,6 +95,47 @@ public sealed class XtreamCoreTests
         Assert.Equal("https://provider.example/series/user/secret/3.mp4", resolver.ResolveEpisodeUrl(config, 3));
     }
 
+    [Theory]
+    [InlineData(0, "ts")]
+    [InlineData(-1, "ts")]
+    [InlineData(1, "")]
+    [InlineData(1, "   ")]
+    [InlineData(1, ".")]
+    public void StreamResolverThrowsControlledExceptionForInvalidStreamInput(int streamId, string extension)
+    {
+        var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
+        var resolver = new StreamResolverService(apiClient);
+        var config = new PluginConfiguration
+        {
+            ServerUrl = "https://provider.example",
+            Username = "user",
+            Password = "secret"
+        };
+
+        var exception = Assert.Throws<XtreamValidationException>(() => resolver.ResolveLiveUrl(config, streamId, extension));
+
+        Assert.NotEmpty(exception.Operation);
+    }
+
+    [Theory]
+    [InlineData("", "user", "secret")]
+    [InlineData("ftp://provider.example", "user", "secret")]
+    [InlineData("https://provider.example", "", "secret")]
+    [InlineData("https://provider.example", "user", "")]
+    public void StreamResolverThrowsControlledExceptionForInvalidConfig(string serverUrl, string username, string password)
+    {
+        var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
+        var resolver = new StreamResolverService(apiClient);
+        var config = new PluginConfiguration
+        {
+            ServerUrl = serverUrl,
+            Username = username,
+            Password = password
+        };
+
+        Assert.Throws<XtreamValidationException>(() => resolver.ResolveLiveUrl(config, 1));
+    }
+
     [Fact]
     public async Task JellyfinLiveTvProviderMapsCachedChannelsAndResolvesPlaybackUrl()
     {
