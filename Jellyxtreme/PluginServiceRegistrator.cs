@@ -4,6 +4,7 @@ using Jellyxtreme.Api;
 using Jellyxtreme.Providers;
 using Jellyxtreme.Services;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Plugins;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -20,6 +21,9 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<XtreamLiveTvProvider>();
         serviceCollection.AddSingleton<XtreamVodProvider>();
         serviceCollection.AddSingleton<XtreamSeriesProvider>();
+        serviceCollection.AddSingleton<JellyfinLiveTvProvider>();
+        serviceCollection.AddSingleton<ITunerHost>(provider => provider.GetRequiredService<JellyfinLiveTvProvider>());
+        serviceCollection.AddSingleton<IConfigurableTunerHost>(provider => provider.GetRequiredService<JellyfinLiveTvProvider>());
         serviceCollection.AddTransient<JellyxtremeApiController>();
     }
 }

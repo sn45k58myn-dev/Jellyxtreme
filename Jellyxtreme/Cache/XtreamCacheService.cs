@@ -7,10 +7,17 @@ public sealed class XtreamCacheService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly ILogger<XtreamCacheService> _logger;
+    private readonly string? _cacheDirectory;
 
     public XtreamCacheService(ILogger<XtreamCacheService> logger)
+        : this(logger, null)
+    {
+    }
+
+    public XtreamCacheService(ILogger<XtreamCacheService> logger, string? cacheDirectory)
     {
         _logger = logger;
+        _cacheDirectory = cacheDirectory;
     }
 
     public async Task<XtreamCacheDocument> LoadAsync(CancellationToken cancellationToken)
@@ -68,25 +75,20 @@ public sealed class XtreamCacheService
         return new XtreamCategoryCache(document.LiveCategories, document.VodCategories, document.SeriesCategories);
     }
 
-    private static string GetCachePath()
+    private string GetCachePath()
+        => Path.Combine(GetCacheDirectory(), "xtream-cache.json");
+
+    private string GetXmlTvPath()
+        => Path.Combine(GetCacheDirectory(), "xmltv.xml");
+
+    private string GetCacheDirectory()
     {
-        var dataPath = Plugin.Instance?.DataFolderPath;
+        var dataPath = _cacheDirectory ?? Plugin.Instance?.DataFolderPath;
         if (string.IsNullOrWhiteSpace(dataPath))
         {
             dataPath = Path.Combine(AppContext.BaseDirectory, "Jellyxtreme");
         }
 
-        return Path.Combine(dataPath, "xtream-cache.json");
-    }
-
-    private static string GetXmlTvPath()
-    {
-        var dataPath = Plugin.Instance?.DataFolderPath;
-        if (string.IsNullOrWhiteSpace(dataPath))
-        {
-            dataPath = Path.Combine(AppContext.BaseDirectory, "Jellyxtreme");
-        }
-
-        return Path.Combine(dataPath, "xmltv.xml");
+        return dataPath;
     }
 }
