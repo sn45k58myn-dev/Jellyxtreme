@@ -188,6 +188,118 @@ public sealed class XtreamCoreTests
     }
 
     [Fact]
+    public async Task VodProviderUsesCachedMetadataAndResolvesStreamsDynamically()
+    {
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N"));
+        var cache = new XtreamCacheService(NullLogger<XtreamCacheService>.Instance, cacheDirectory);
+        await cache.SaveAsync(new XtreamCacheDocument
+        {
+            VodCategories = [new CachedCategory { CategoryId = "11", Name = "Movies", Kind = "vod" }],
+            VodItems =
+            [
+                new CachedVodItem
+                {
+                    Name = "Cached Movie",
+                    StreamId = 55,
+                    CategoryId = "11",
+                    Poster = "https://poster.example/movie.jpg",
+                    Rating = 8.1,
+                    ContainerExtension = "mkv",
+                    Added = "2026-06-13"
+                }
+            ]
+        }, CancellationToken.None);
+
+        var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
+        var provider = new VodProvider(
+            cache,
+            new StreamResolverService(apiClient),
+            () => new PluginConfiguration
+            {
+                ServerUrl = "https://provider.example",
+                Username = "user",
+                Password = "secret"
+            });
+
+        var items = await provider.GetItemsAsync(CancellationToken.None);
+        var mediaSources = await provider.GetMediaSourcesAsync(55, CancellationToken.None);
+
+        Assert.Single(items);
+        Assert.Equal("Cached Movie", items[0].Name);
+        Assert.Equal("Movies", items[0].CategoryName);
+        Assert.Equal("https://poster.example/movie.jpg", items[0].Poster);
+        Assert.Single(mediaSources);
+        Assert.Equal("https://provider.example/movie/user/secret/55.mkv", mediaSources[0].Path);
+        Assert.True(mediaSources[0].IsRemote);
+    }
+
+    [Fact]
+    public async Task SeriesProviderUsesCachedMetadataAndResolvesEpisodeStreamsDynamically()
+    {
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N"));
+        var cache = new XtreamCacheService(NullLogger<XtreamCacheService>.Instance, cacheDirectory);
+        await cache.SaveAsync(new XtreamCacheDocument
+        {
+            SeriesCategories = [new CachedCategory { CategoryId = "22", Name = "Drama", Kind = "series" }],
+            SeriesItems =
+            [
+                new CachedSeriesItem
+                {
+                    Name = "Cached Series",
+                    SeriesId = 77,
+                    CategoryId = "22",
+                    Poster = "https://poster.example/series.jpg",
+                    Plot = "Cached plot",
+                    Rating = 7.5,
+                    Seasons =
+                    [
+                        new CachedSeason
+                        {
+                            SeasonNumber = 1,
+                            Episodes =
+                            [
+                                new CachedEpisodeItem
+                                {
+                                    Title = "Pilot",
+                                    StreamId = 88,
+                                    EpisodeNumber = "1",
+                                    ContainerExtension = "mp4",
+                                    Plot = "Episode plot"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }, CancellationToken.None);
+
+        var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
+        var provider = new SeriesProvider(
+            cache,
+            new StreamResolverService(apiClient),
+            () => new PluginConfiguration
+            {
+                ServerUrl = "https://provider.example",
+                Username = "user",
+                Password = "secret"
+            });
+
+        var series = await provider.GetSeriesInfosAsync(CancellationToken.None);
+        var episodes = await provider.GetEpisodesAsync(77, CancellationToken.None);
+        var mediaSources = await provider.GetEpisodeMediaSourcesAsync(88, CancellationToken.None);
+
+        Assert.Single(series);
+        Assert.Equal("Cached Series", series[0].Name);
+        Assert.Equal("Drama", series[0].CategoryName);
+        Assert.Equal(1, series[0].EpisodeCount);
+        Assert.Single(episodes);
+        Assert.Equal("Pilot", episodes[0].Title);
+        Assert.Single(mediaSources);
+        Assert.Equal("https://provider.example/series/user/secret/88.mp4", mediaSources[0].Path);
+        Assert.True(mediaSources[0].IsRemote);
+    }
+
+    [Fact]
     public async Task XmlTvCacheMapsProgramsToCachedChannelEpgIds()
     {
         var xml = """

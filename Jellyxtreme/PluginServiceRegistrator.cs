@@ -20,6 +20,8 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<XtreamCacheRefreshService>();
         serviceCollection.AddSingleton<StreamResolverService>();
         serviceCollection.AddSingleton<XtreamLiveTvProvider>();
+        serviceCollection.AddSingleton<VodProvider>();
+        serviceCollection.AddSingleton<SeriesProvider>();
         serviceCollection.AddSingleton<XtreamVodProvider>();
         serviceCollection.AddSingleton<XtreamSeriesProvider>();
         serviceCollection.AddSingleton<JellyfinLiveTvProvider>();
