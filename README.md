@@ -58,6 +58,7 @@ If no categories are selected, Jellyxtreme imports nothing. If only one section 
 - `Api/XtreamApiClient.cs` contains authenticated Xtream API calls for categories, streams, series info, and XMLTV.
 - `Cache/` contains `XtreamCacheService`, the provider cache document, category caches, cached live channels, VOD items, series items, and episode items.
 - `Services/XtreamCacheRefreshService.cs` refreshes selected categories only.
+- Series refresh calls `get_series` first, then calls `get_series_info` for every valid series returned before caching only selected category results.
 - `Services/StreamResolverService.cs` resolves authenticated Xtream URLs only at playback time.
 - `Providers/` contains Live TV, VOD, and Series provider foundations over the cache.
 - `Controllers/JellyxtremeController.cs` exposes the authenticated admin endpoints used by the config page: test connection, categories, and cache summary.

@@ -189,19 +189,23 @@ public sealed class XtreamCacheRefreshService
         CancellationToken cancellationToken)
     {
         var seriesList = await client.GetSeriesAsync(settings, cancellationToken).ConfigureAwait(false);
-        var selectedSeries = seriesList
-            .Where(series => XtreamSelectionFilter.IsCategorySelected(series.CategoryId, config.SelectedSeriesCategoryIds))
+        var validSeries = seriesList
             .Where(series => series.SeriesId > 0 && !string.IsNullOrWhiteSpace(series.Name))
             .ToList();
 
-        var cached = new List<CachedSeriesItem>(selectedSeries.Count);
-        foreach (var series in selectedSeries)
+        var cached = new List<CachedSeriesItem>();
+        foreach (var series in validSeries)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             try
             {
                 var info = await client.GetSeriesInfoAsync(settings, series.SeriesId, cancellationToken).ConfigureAwait(false);
+                if (!XtreamSelectionFilter.IsCategorySelected(series.CategoryId, config.SelectedSeriesCategoryIds))
+                {
+                    continue;
+                }
+
                 cached.Add(new CachedSeriesItem
                 {
                     Name = series.Name!,
