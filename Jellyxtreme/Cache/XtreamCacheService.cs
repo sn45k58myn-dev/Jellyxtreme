@@ -37,9 +37,23 @@ public sealed class XtreamCacheService
     {
         var path = GetCachePath();
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        document.CacheVersion = Math.Max(1, document.CacheVersion);
 
-        await using var stream = File.Create(path);
-        await JsonSerializer.SerializeAsync(stream, document, JsonOptions, cancellationToken).ConfigureAwait(false);
+        var tempPath = path + ".tmp";
+        await using (var stream = File.Create(tempPath))
+        {
+            await JsonSerializer.SerializeAsync(stream, document, JsonOptions, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (File.Exists(path))
+        {
+            File.Replace(tempPath, path, null);
+        }
+        else
+        {
+            File.Move(tempPath, path);
+        }
+
         _logger.LogInformation("JellyXtreme cache refreshed with {LiveCount} live channels, {VodCount} VOD items, and {SeriesCount} series.",
             document.LiveChannels.Count,
             document.VodItems.Count,

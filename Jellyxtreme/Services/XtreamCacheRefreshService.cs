@@ -1,8 +1,8 @@
 using Jellyxtreme.Api;
 using Jellyxtreme.Cache;
 using Jellyxtreme.Configuration;
-using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 
 namespace Jellyxtreme.Services;
 
@@ -227,38 +227,74 @@ public sealed class XtreamCacheRefreshService
             .Where(series => series.SeriesId > 0 && !string.IsNullOrWhiteSpace(series.Name))
             .ToList();
 
-        var cached = new List<CachedSeriesItem>();
-        foreach (var series in validSeries)
+        using var throttle = new SemaphoreSlim(5, 5);
+        var completed = 0;
+        var tasks = validSeries.Select(series => FetchSeriesInfoAsync(
+            client,
+            settings,
+            config,
+            series,
+            throttle,
+            validSeries.Count,
+            () => Interlocked.Increment(ref completed),
+            cancellationToken));
+
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        return results.Where(item => item is not null).Select(item => item!).ToList();
+    }
+
+    private async Task<CachedSeriesItem?> FetchSeriesInfoAsync(
+        XtreamApiClient client,
+        XtreamConnectionSettings settings,
+        PluginConfiguration config,
+        XtreamSeries series,
+        SemaphoreSlim throttle,
+        int totalCount,
+        Func<int> incrementCompleted,
+        CancellationToken cancellationToken)
+    {
+        await throttle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            try
+            var info = await client.GetSeriesInfoAsync(settings, series.SeriesId, cancellationToken).ConfigureAwait(false);
+            var completed = incrementCompleted();
+            if (completed % 25 == 0 || completed == totalCount)
             {
-                var info = await client.GetSeriesInfoAsync(settings, series.SeriesId, cancellationToken).ConfigureAwait(false);
-                if (!XtreamSelectionFilter.IsCategorySelected(series.CategoryId, config.SelectedSeriesCategoryIds))
-                {
-                    continue;
-                }
+                _logger.LogInformation("JellyXtreme fetched series metadata for {CompletedCount}/{TotalCount} series.", completed, totalCount);
+            }
 
-                cached.Add(new CachedSeriesItem
-                {
-                    Name = series.Name!,
-                    SeriesId = series.SeriesId,
-                    CategoryId = series.CategoryId!,
-                    Poster = series.Cover,
-                    Plot = info?.Info?.Plot ?? series.Plot,
-                    Rating = series.Rating,
-                    Seasons = ToCachedSeasons(info)
-                });
-            }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
+            if (!XtreamSelectionFilter.IsCategorySelected(series.CategoryId, config.SelectedSeriesCategoryIds))
             {
-                _logger.LogWarning(ex, "Skipping Xtream series {SeriesId} after metadata fetch failure.", series.SeriesId);
+                return null;
             }
+
+            return new CachedSeriesItem
+            {
+                Name = series.Name!,
+                SeriesId = series.SeriesId,
+                CategoryId = series.CategoryId!,
+                Poster = series.Cover,
+                Plot = info?.Info?.Plot ?? series.Plot,
+                Rating = series.Rating,
+                Seasons = ToCachedSeasons(info)
+            };
         }
-
-        return cached;
+        catch (Exception ex) when (IsSeriesMetadataFailure(ex, cancellationToken))
+        {
+            _logger.LogWarning("Skipping Xtream series {SeriesId} after metadata fetch failure: {Error}", series.SeriesId, SanitizeError(ex));
+            return null;
+        }
+        finally
+        {
+            throttle.Release();
+        }
     }
+
+    private static bool IsSeriesMetadataFailure(Exception exception, CancellationToken cancellationToken)
+        => exception is HttpRequestException
+            || exception is System.Text.Json.JsonException
+            || exception is TaskCanceledException && !cancellationToken.IsCancellationRequested;
 
     private static List<CachedSeason> ToCachedSeasons(XtreamSeriesInfoResponse? info)
     {

@@ -1,6 +1,6 @@
 # Jellyxtreme
 
-Jellyxtreme is a Jellyfin plugin for connecting to authorised Xtream-compatible providers. The plugin uses a selectable provider/cache architecture for Jellyfin 10.11.x and .NET 8.
+Jellyxtreme is a Jellyfin plugin for connecting to authorised Xtream-compatible providers. The plugin uses a selectable provider/cache architecture for Jellyfin 10.11.x and .NET 9.
 
 Jellyxtreme now caches only explicitly selected import sections and categories:
 
@@ -14,8 +14,10 @@ Default mode does not generate `.strm` files or `.m3u` playlists.
 ## Compatibility
 
 - Jellyfin 10.11.x
-- .NET 8 target framework
-- Jellyfin package references: 10.10.7, the latest stable Jellyfin package line that restores against `net8.0`. Current Jellyfin 10.11.x NuGet packages target `net9.0`, so they cannot be referenced while keeping `TargetFramework` at `net8.0`.
+- .NET 9 target framework
+- Jellyfin package references: `Jellyfin.Controller` `10.11.11` and `Jellyfin.Model` `10.11.11`
+
+Jellyfin `10.11.11` NuGet packages target `net9.0`, so Jellyxtreme now targets `net9.0` to stay aligned with the current Jellyfin 10.11 package line.
 
 ## Legal Use
 
@@ -23,7 +25,7 @@ Only connect Jellyxtreme to lawful and authorised Xtream providers. You are resp
 
 ## Build
 
-Install the .NET 8 SDK, then run:
+Install the .NET 9 SDK, then run:
 
 ```powershell
 dotnet restore .\Jellyxtreme\Jellyxtreme.csproj
@@ -31,7 +33,7 @@ dotnet build .\Jellyxtreme\Jellyxtreme.csproj
 dotnet test .\Jellyxtreme.Tests\Jellyxtreme.Tests.csproj
 ```
 
-The plugin assembly is produced under `Jellyxtreme/bin/<Configuration>/net8.0/`.
+The plugin assembly is produced under `Jellyxtreme/bin/<Configuration>/net9.0/`. For a debug build, copy from `Jellyxtreme/bin/Debug/net9.0/`; for a release build, copy from `Jellyxtreme/bin/Release/net9.0/`.
 
 ## Install
 
@@ -40,6 +42,8 @@ The plugin assembly is produced under `Jellyxtreme/bin/<Configuration>/net8.0/`.
 3. Copy `Jellyxtreme.dll` and `plugin.json` into that directory.
 4. Restart Jellyfin.
 5. Open Dashboard -> Plugins -> Jellyxtreme.
+
+`plugin.json` is copied to the build output by the project file. `Configuration/configPage.html` is embedded as `Jellyxtreme.Configuration.configPage.html` and is loaded by the plugin configuration page.
 
 ## Configuration
 
@@ -56,25 +60,40 @@ If no categories are selected, Jellyxtreme imports nothing. If only one section 
 ## Architecture
 
 - `Api/XtreamApiClient.cs` contains authenticated Xtream API calls for categories, streams, series info, and XMLTV.
-- `Cache/` contains `XtreamCacheService`, the provider cache document, category caches, cached live channels, VOD items, series items, and episode items.
+- `Cache/` contains `XtreamCacheService`, the provider cache document, category caches, cached live channels, VOD items, series items, and episode items. Cache files are versioned and written atomically by writing a temporary file before replacing the previous cache.
 - `Services/XtreamCacheRefreshService.cs` refreshes selected categories only.
-- Series refresh calls `get_series` first, then calls `get_series_info` for every valid series returned before caching only selected category results.
+- Series refresh calls `get_series` first, then calls `get_series_info` for every valid series returned before caching only selected category results. Series info requests are throttled to five concurrent requests.
 - `Services/StreamResolverService.cs` resolves authenticated Xtream URLs only at playback time.
 - `Providers/` contains Live TV, VOD, and Series provider foundations over the cache.
-- `Controllers/JellyxtremeController.cs` exposes the authenticated admin endpoints used by the config page: test connection, categories, and cache summary.
+- `Controllers/JellyxtremeApiController.cs` exposes authenticated admin endpoints used by the config page: test connection, categories, cache summary, and beta VOD/Series test listing endpoints.
 - `PluginServiceRegistrator.cs` registers the cache, refresh, resolver, and provider services with Jellyfin dependency injection.
 - `Configuration/configPage.html` is the embedded admin page.
 - `Tasks/XtreamSyncTask.cs` exposes the manual scheduled cache refresh task.
 - `Jellyxtreme.Tests/` covers URL building, category filtering, section cache policy, credential redaction, resolver paths, and config defaults.
 
-Sensitive values are kept out of logs. Server URLs are validated as absolute `http` or `https` URLs, and authenticated stream URLs are resolved only when playback/provider code requests them.
+Sensitive values are kept out of logs. Server URLs are validated as absolute `http` or `https` URLs, and authenticated stream URLs are resolved only when playback/provider code requests them. Passwords are currently stored in plugin configuration; future work should move them to encrypted or Jellyfin-managed secret storage when a stable plugin API is available.
 
-The current Jellyfin package line exposes only a narrow Live TV tuner validation interface to plugins. Jellyxtreme therefore ships the cached Live TV provider and playback-time stream resolver foundation now; deeper native tuner/channel registration can be completed when the Jellyfin 10.11 plugin API exposes the needed channel streaming contracts to third-party plugins.
+The Live TV foundation is registered as a Jellyfin `ITunerHost`/`IConfigurableTunerHost` and exposes cached channels with playback-time stream resolution. VOD and Series currently expose cached metadata and playback media sources through provider services plus beta admin/test endpoints; full virtual library integration remains a follow-up.
+
+## Beta Admin/Test Endpoints
+
+These endpoints require Jellyfin authentication:
+
+- `POST /Jellyxtreme/TestConnection`
+- `POST /Jellyxtreme/Categories`
+- `GET /Jellyxtreme/Categories`
+- `GET /Jellyxtreme/CacheSummary`
+- `GET /Jellyxtreme/Vod?startIndex=0&limit=100`
+- `GET /Jellyxtreme/Vod/{streamId}/MediaSources?includePlaybackUrl=true`
+- `GET /Jellyxtreme/Series?startIndex=0&limit=100`
+- `GET /Jellyxtreme/Series/{seriesId}/Episodes?startIndex=0&limit=100`
+- `GET /Jellyxtreme/Series/Episodes/{episodeStreamId}/MediaSources?includePlaybackUrl=true`
+
+The media-source endpoints return authenticated playback URLs only when `includePlaybackUrl=true` is explicitly supplied.
 
 ## Roadmap
 
-- Wire the Live TV foundation into Jellyfin's current 10.11 provider/tuner APIs where plugin support allows.
 - Expose cached VOD and Series entries through native Jellyfin provider/library integration.
 - Add optional M3U export as a separate opt-in feature, not as the default flow.
 - Add encrypted or Jellyfin-managed secret storage for provider passwords when a stable plugin API is available.
-- Add automated tests around category filtering, cache refresh, and credential redaction.
+- Expand integration tests against a live Jellyfin 10.11 server.

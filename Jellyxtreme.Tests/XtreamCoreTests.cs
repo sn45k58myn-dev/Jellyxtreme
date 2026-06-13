@@ -1,9 +1,13 @@
 using Jellyxtreme.Api;
 using Jellyxtreme.Cache;
 using Jellyxtreme.Configuration;
+using Jellyxtreme.Controllers;
 using Jellyxtreme.Providers;
 using Jellyxtreme.Services;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
+using System.Xml.Linq;
 using Xunit;
 
 namespace Jellyxtreme.Tests;
@@ -26,6 +30,34 @@ public sealed class XtreamCoreTests
         Assert.Empty(config.LastSyncError);
     }
 
+    [Fact]
+    public void ProjectTargetsNet9WithJellyfin1011Packages()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var project = XDocument.Load(Path.Combine(repositoryRoot, "Jellyxtreme", "Jellyxtreme.csproj"));
+        var packageVersions = project.Descendants("PackageReference")
+            .ToDictionary(
+                item => item.Attribute("Include")?.Value ?? string.Empty,
+                item => item.Attribute("Version")?.Value ?? string.Empty);
+
+        Assert.Equal("net9.0", project.Descendants("TargetFramework").Single().Value);
+        Assert.Equal("10.11.11", packageVersions["Jellyfin.Controller"]);
+        Assert.Equal("10.11.11", packageVersions["Jellyfin.Model"]);
+    }
+
+    [Fact]
+    public void PluginManifestIsValidAndConfigPageIsEmbedded()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(repositoryRoot, "Jellyxtreme", "plugin.json")));
+
+        Assert.Equal("Jellyxtreme", document.RootElement.GetProperty("name").GetString());
+        Assert.Equal("10.11.0.0", document.RootElement.GetProperty("targetAbi").GetString());
+        Assert.Contains(
+            "Jellyxtreme.Configuration.configPage.html",
+            typeof(Plugin).Assembly.GetManifestResourceNames());
+    }
+
     [Theory]
     [InlineData("http://example.com", true)]
     [InlineData("https://example.com:8080", true)]
@@ -44,6 +76,9 @@ public sealed class XtreamCoreTests
         Assert.Equal("https://provider.example/player_api.php?redacted=true", redacted);
         Assert.DoesNotContain("user", redacted);
         Assert.DoesNotContain("secret", redacted);
+
+        var streamUrl = XtreamApiClient.Redact("https://provider.example/movie/user/secret/55.mkv");
+        Assert.Equal("https://provider.example/movie/redacted/redacted/55.mkv", streamUrl);
     }
 
     [Fact]
@@ -234,6 +269,42 @@ public sealed class XtreamCoreTests
     }
 
     [Fact]
+    public async Task ControllerRejectsInvalidConnectionUrl()
+    {
+        var controller = CreateController(Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N")));
+
+        var result = await controller.TestConnection(
+            new XtreamConnectionRequest("ftp://provider.example", "user", "secret"),
+            CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task ControllerRequiresExplicitPlaybackUrlForVodMediaSources()
+    {
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N"));
+        var controller = CreateController(cacheDirectory);
+
+        var result = await controller.GetVodMediaSources(1, includePlaybackUrl: false, CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task CacheSavePersistsVersionedDocument()
+    {
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N"));
+        var cache = new XtreamCacheService(NullLogger<XtreamCacheService>.Instance, cacheDirectory);
+
+        await cache.SaveAsync(new XtreamCacheDocument { CacheVersion = 0 }, CancellationToken.None);
+        var loaded = await cache.LoadAsync(CancellationToken.None);
+
+        Assert.Equal(1, loaded.CacheVersion);
+        Assert.False(File.Exists(Path.Combine(cacheDirectory, "xtream-cache.json.tmp")));
+    }
+
+    [Fact]
     public async Task SeriesProviderUsesCachedMetadataAndResolvesEpisodeStreamsDynamically()
     {
         var cacheDirectory = Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N"));
@@ -361,5 +432,38 @@ public sealed class XtreamCoreTests
     private sealed class TestHttpClientFactory : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new();
+    }
+
+    private static JellyxtremeApiController CreateController(string cacheDirectory)
+    {
+        var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
+        var cache = new XtreamCacheService(NullLogger<XtreamCacheService>.Instance, cacheDirectory);
+        var resolver = new StreamResolverService(apiClient);
+        return new JellyxtremeApiController(
+            apiClient,
+            new XtreamCacheRefreshService(
+                apiClient,
+                cache,
+                new XmlTvCacheService(apiClient, cache, NullLogger<XmlTvCacheService>.Instance),
+                NullLogger<XtreamCacheRefreshService>.Instance),
+            cache,
+            new VodProvider(cache, resolver, () => new PluginConfiguration()),
+            new SeriesProvider(cache, resolver, () => new PluginConfiguration()));
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "README.md")))
+        {
+            directory = directory.Parent;
+        }
+
+        if (directory is null)
+        {
+            throw new DirectoryNotFoundException("Could not locate repository root.");
+        }
+
+        return directory.FullName;
     }
 }

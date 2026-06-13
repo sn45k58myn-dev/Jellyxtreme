@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyxtreme.Api;
@@ -48,7 +49,7 @@ public sealed class XtreamApiClient
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException)
         {
-            _logger.LogWarning(ex, "Xtream connection test failed for {ServerUrl}.", Redact(settings.ServerUrl));
+            _logger.LogWarning("Xtream connection test failed for {ServerUrl}: {Error}", Redact(settings.ServerUrl), Redact(ex.Message));
             return new XtreamConnectionResult(false, "Connection failed. Check the server URL and credentials.");
         }
     }
@@ -180,9 +181,27 @@ public sealed class XtreamApiClient
         Func<CancellationToken, Task<T>> action,
         CancellationToken cancellationToken)
     {
-        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutSource.CancelAfter(settings.Timeout);
-        return await action(timeoutSource.Token).ConfigureAwait(false);
+        const int maxAttempts = 3;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutSource.CancelAfter(settings.Timeout);
+
+            try
+            {
+                return await action(timeoutSource.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsTransient(ex, cancellationToken) && attempt < maxAttempts)
+            {
+                var delay = TimeSpan.FromMilliseconds(250 * attempt);
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        using var finalTimeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        finalTimeoutSource.CancelAfter(settings.Timeout);
+        return await action(finalTimeoutSource.Token).ConfigureAwait(false);
     }
 
     public static string Redact(string value)
@@ -192,8 +211,46 @@ public sealed class XtreamApiClient
             return string.Empty;
         }
 
-        var queryIndex = value.IndexOf('?', StringComparison.Ordinal);
-        return queryIndex >= 0 ? value[..queryIndex] + "?redacted=true" : value;
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+        {
+            return RedactKnownFields(value);
+        }
+
+        var builder = new UriBuilder(uri);
+        if (!string.IsNullOrEmpty(builder.Query))
+        {
+            builder.Query = "redacted=true";
+        }
+
+        var segments = builder.Path.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length >= 4
+            && IsStreamSegment(segments[0]))
+        {
+            segments[1] = "redacted";
+            segments[2] = "redacted";
+            builder.Path = "/" + string.Join("/", segments);
+        }
+
+        return builder.Uri.AbsoluteUri;
+    }
+
+    private static bool IsTransient(Exception exception, CancellationToken cancellationToken)
+        => exception is HttpRequestException
+            || exception is TaskCanceledException && !cancellationToken.IsCancellationRequested;
+
+    private static bool IsStreamSegment(string value)
+        => string.Equals(value, "live", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "movie", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "series", StringComparison.OrdinalIgnoreCase);
+
+    private static string RedactKnownFields(string value)
+    {
+        return Regex.Replace(
+            value,
+            "(username|password)=([^&\\s]+)",
+            "$1=redacted",
+            RegexOptions.IgnoreCase,
+            TimeSpan.FromMilliseconds(100));
     }
 }
 

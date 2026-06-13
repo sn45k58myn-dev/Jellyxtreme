@@ -2,6 +2,7 @@ namespace Jellyxtreme.Cache;
 
 public sealed class XtreamCacheDocument
 {
+    public int CacheVersion { get; set; } = 1;
     public DateTimeOffset RefreshedAt { get; set; } = DateTimeOffset.UtcNow;
     public List<CachedCategory> LiveCategories { get; set; } = [];
     public List<CachedCategory> VodCategories { get; set; } = [];
