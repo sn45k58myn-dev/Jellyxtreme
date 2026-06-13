@@ -1,6 +1,7 @@
 using Jellyxtreme.Api;
 using Jellyxtreme.Cache;
 using Jellyxtreme.Configuration;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyxtreme.Services;
@@ -29,76 +30,97 @@ public sealed class XtreamCacheRefreshService
         IProgress<double>? progress,
         CancellationToken cancellationToken)
     {
+        var stopwatch = Stopwatch.StartNew();
         progress?.Report(0);
 
-        if (!HasCredentials(config))
+        try
         {
-            _logger.LogWarning("JellyXtreme is not configured. Skipping cache refresh.");
-            return new XtreamCacheDocument();
+            if (!HasCredentials(config))
+            {
+                stopwatch.Stop();
+                config.LastSyncDurationMs = stopwatch.ElapsedMilliseconds;
+                config.LastSyncError = "JellyXtreme plugin is not configured.";
+                Plugin.Instance?.SaveConfiguration();
+                _logger.LogWarning("JellyXtreme is not configured. Skipping cache refresh.");
+                return new XtreamCacheDocument();
+            }
+
+            var settings = XtreamConnectionSettings.FromConfig(config);
+            var document = new XtreamCacheDocument { RefreshedAt = DateTimeOffset.UtcNow };
+
+            var liveCategories = await _apiClient.GetLiveCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+            var vodCategories = await _apiClient.GetVodCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+            var seriesCategories = await _apiClient.GetSeriesCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+
+            document.LiveCategories = ToCachedCategories(liveCategories, "live");
+            document.VodCategories = ToCachedCategories(vodCategories, "vod");
+            document.SeriesCategories = ToCachedCategories(seriesCategories, "series");
+            progress?.Report(15);
+
+            var skippedSections = new List<string>();
+
+            if (XtreamSelectionFilter.ShouldCacheSection(config.EnableLiveTv, config.SelectedLiveCategoryIds))
+            {
+                document.LiveChannels = await RefreshLiveAsync(_apiClient, settings, config, document.LiveCategories, cancellationToken).ConfigureAwait(false);
+                document.XmlTv = await _xmlTvCacheService.DownloadAndCacheAsync(settings, document.LiveChannels, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                skippedSections.Add("Live TV");
+                _logger.LogInformation("JellyXtreme Live TV cache skipped because it is disabled or no Live TV categories are selected.");
+            }
+
+            progress?.Report(45);
+
+            if (XtreamSelectionFilter.ShouldCacheSection(config.EnableVod, config.SelectedVodCategoryIds))
+            {
+                document.VodItems = await RefreshVodAsync(_apiClient, settings, config, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                skippedSections.Add("VOD");
+                _logger.LogInformation("JellyXtreme VOD cache skipped because it is disabled or no VOD categories are selected.");
+            }
+
+            progress?.Report(70);
+
+            if (XtreamSelectionFilter.ShouldCacheSection(config.EnableSeries, config.SelectedSeriesCategoryIds))
+            {
+                document.SeriesItems = await RefreshSeriesAsync(_apiClient, settings, config, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                skippedSections.Add("Series");
+                _logger.LogInformation("JellyXtreme Series cache skipped because it is disabled or no Series categories are selected.");
+            }
+
+            progress?.Report(95);
+            await _cacheService.SaveAsync(document, cancellationToken).ConfigureAwait(false);
+            stopwatch.Stop();
+            config.LastSuccessfulSyncUtc = document.RefreshedAt;
+            config.LastSyncDurationMs = stopwatch.ElapsedMilliseconds;
+            config.LastSyncError = string.Empty;
+            Plugin.Instance?.SaveConfiguration();
+            _logger.LogInformation(
+                "JellyXtreme refresh imported {LiveCount} live channels, {VodCount} VOD items, {SeriesCount} series, and {EpisodeCount} episodes in {DurationMs} ms. Skipped sections: {SkippedSections}.",
+                document.LiveChannels.Count,
+                document.VodItems.Count,
+                document.SeriesItems.Count,
+                document.SeriesItems.Sum(series => series.Seasons.Sum(season => season.Episodes.Count)),
+                stopwatch.ElapsedMilliseconds,
+                skippedSections.Count == 0 ? "none" : string.Join(", ", skippedSections));
+            progress?.Report(100);
+            return document;
         }
-
-        var settings = XtreamConnectionSettings.FromConfig(config);
-        var document = new XtreamCacheDocument { RefreshedAt = DateTimeOffset.UtcNow };
-
-        var liveCategories = await _apiClient.GetLiveCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
-        var vodCategories = await _apiClient.GetVodCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
-        var seriesCategories = await _apiClient.GetSeriesCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
-
-        document.LiveCategories = ToCachedCategories(liveCategories, "live");
-        document.VodCategories = ToCachedCategories(vodCategories, "vod");
-        document.SeriesCategories = ToCachedCategories(seriesCategories, "series");
-        progress?.Report(15);
-
-        var skippedSections = new List<string>();
-
-        if (XtreamSelectionFilter.ShouldCacheSection(config.EnableLiveTv, config.SelectedLiveCategoryIds))
+        catch (Exception ex)
         {
-            document.LiveChannels = await RefreshLiveAsync(_apiClient, settings, config, document.LiveCategories, cancellationToken).ConfigureAwait(false);
-            document.XmlTv = await _xmlTvCacheService.DownloadAndCacheAsync(settings, document.LiveChannels, cancellationToken).ConfigureAwait(false);
+            stopwatch.Stop();
+            config.LastSyncDurationMs = stopwatch.ElapsedMilliseconds;
+            config.LastSyncError = SanitizeError(ex);
+            Plugin.Instance?.SaveConfiguration();
+            _logger.LogError("JellyXtreme cache refresh failed after {DurationMs} ms: {Error}", stopwatch.ElapsedMilliseconds, config.LastSyncError);
+            throw;
         }
-        else
-        {
-            skippedSections.Add("Live TV");
-            _logger.LogInformation("JellyXtreme Live TV cache skipped because it is disabled or no Live TV categories are selected.");
-        }
-
-        progress?.Report(45);
-
-        if (XtreamSelectionFilter.ShouldCacheSection(config.EnableVod, config.SelectedVodCategoryIds))
-        {
-            document.VodItems = await RefreshVodAsync(_apiClient, settings, config, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            skippedSections.Add("VOD");
-            _logger.LogInformation("JellyXtreme VOD cache skipped because it is disabled or no VOD categories are selected.");
-        }
-
-        progress?.Report(70);
-
-        if (XtreamSelectionFilter.ShouldCacheSection(config.EnableSeries, config.SelectedSeriesCategoryIds))
-        {
-            document.SeriesItems = await RefreshSeriesAsync(_apiClient, settings, config, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            skippedSections.Add("Series");
-            _logger.LogInformation("JellyXtreme Series cache skipped because it is disabled or no Series categories are selected.");
-        }
-
-        progress?.Report(95);
-        await _cacheService.SaveAsync(document, cancellationToken).ConfigureAwait(false);
-        config.LastSuccessfulSyncUtc = document.RefreshedAt;
-        Plugin.Instance?.SaveConfiguration();
-        _logger.LogInformation(
-            "JellyXtreme refresh imported {LiveCount} live channels, {VodCount} VOD items, {SeriesCount} series, and {EpisodeCount} episodes. Skipped sections: {SkippedSections}.",
-            document.LiveChannels.Count,
-            document.VodItems.Count,
-            document.SeriesItems.Count,
-            document.SeriesItems.Sum(series => series.Seasons.Sum(season => season.Episodes.Count)),
-            skippedSections.Count == 0 ? "none" : string.Join(", ", skippedSections));
-        progress?.Report(100);
-        return document;
     }
 
     public async Task<XtreamCategorySnapshot> GetCategoriesAsync(PluginConfiguration config, CancellationToken cancellationToken)
@@ -120,6 +142,18 @@ public sealed class XtreamCacheRefreshService
         => XtreamApiClient.TryNormalizeServerUrl(config.ServerUrl, out _)
             && !string.IsNullOrWhiteSpace(config.Username)
             && !string.IsNullOrWhiteSpace(config.Password);
+
+    private static string SanitizeError(Exception exception)
+    {
+        var message = XtreamApiClient.Redact(exception.Message);
+        const int maxLength = 500;
+        if (message.Length > maxLength)
+        {
+            message = message[..maxLength];
+        }
+
+        return $"{exception.GetType().Name}: {message}";
+    }
 
     private static List<CachedCategory> ToCachedCategories(IEnumerable<XtreamCategory> categories, string kind)
         => categories

@@ -40,8 +40,15 @@
                         </button>
                     </div>
                     <p id="ConnectionStatus" class="fieldDescription"></p>
-                    <p id="CacheSummary" class="fieldDescription"></p>
-                    <p id="LastSyncStatus" class="fieldDescription"></p>
+                    <div id="CacheSummary" class="fieldDescription">
+                        <div id="LastSyncStatus">Last sync: never</div>
+                        <div id="LiveChannelsCached">Live channels cached: 0</div>
+                        <div id="VodItemsCached">VOD items cached: 0</div>
+                        <div id="SeriesCached">Series cached: 0</div>
+                        <div id="EpisodesCached">Episodes cached: 0</div>
+                        <div id="SyncDuration">Sync duration: none</div>
+                        <div id="LastSyncError">Last error: none</div>
+                    </div>
 
                     <h2>Live TV</h2>
                     <label class="checkboxContainer">
@@ -150,22 +157,55 @@
                     page().querySelector('#SeriesCategoryCount').textContent = selectedCategoryIds('SeriesCategories').length + ' selected';
                 }
 
+                function formatDuration(milliseconds) {
+                    if (milliseconds === null || milliseconds === undefined || milliseconds === '') {
+                        return 'none';
+                    }
+
+                    var duration = Number(milliseconds);
+                    if (!isFinite(duration)) {
+                        return 'none';
+                    }
+
+                    if (duration < 1000) {
+                        return Math.max(0, Math.round(duration)) + ' ms';
+                    }
+
+                    return (duration / 1000).toFixed(1) + ' seconds';
+                }
+
+                function field(object, pascalName, camelName) {
+                    if (object[pascalName] !== undefined && object[pascalName] !== null) {
+                        return object[pascalName];
+                    }
+
+                    return object[camelName];
+                }
+
                 function loadCacheSummary() {
                     return getJson('Jellyxtreme/CacheSummary').then(function (summary) {
-                        var live = summary.LiveChannelCount || summary.liveChannelCount || 0;
-                        var vod = summary.VodItemCount || summary.vodItemCount || 0;
-                        var series = summary.SeriesItemCount || summary.seriesItemCount || 0;
-                        var episodes = summary.EpisodeItemCount || summary.episodeItemCount || 0;
-                        var total = live + vod + series + episodes;
-                        page().querySelector('#CacheSummary').textContent = total === 0
-                            ? 'Cache empty'
-                            : live + ' live channels, ' + vod + ' VOD items, ' + series + ' series, ' + episodes + ' episodes cached';
-
-                        var sync = summary.LastSuccessfulSyncUtc || summary.lastSuccessfulSyncUtc || summary.RefreshedAt || summary.refreshedAt;
+                        var live = field(summary, 'LiveChannelCount', 'liveChannelCount') || 0;
+                        var vod = field(summary, 'VodItemCount', 'vodItemCount') || 0;
+                        var series = field(summary, 'SeriesItemCount', 'seriesItemCount') || 0;
+                        var episodes = field(summary, 'EpisodeItemCount', 'episodeItemCount') || 0;
+                        var sync = field(summary, 'LastSuccessfulSyncUtc', 'lastSuccessfulSyncUtc') || field(summary, 'RefreshedAt', 'refreshedAt');
                         page().querySelector('#LastSyncStatus').textContent = sync ? 'Last sync: ' + new Date(sync).toLocaleString() : 'Last sync: never';
+                        page().querySelector('#LiveChannelsCached').textContent = 'Live channels cached: ' + live;
+                        page().querySelector('#VodItemsCached').textContent = 'VOD items cached: ' + vod;
+                        page().querySelector('#SeriesCached').textContent = 'Series cached: ' + series;
+                        page().querySelector('#EpisodesCached').textContent = 'Episodes cached: ' + episodes;
+                        page().querySelector('#SyncDuration').textContent = 'Sync duration: ' + formatDuration(field(summary, 'LastSyncDurationMs', 'lastSyncDurationMs'));
+
+                        var lastError = field(summary, 'LastSyncError', 'lastSyncError') || '';
+                        page().querySelector('#LastSyncError').textContent = 'Last error: ' + (lastError ? lastError : 'none');
                     }).catch(function () {
-                        page().querySelector('#CacheSummary').textContent = '';
-                        page().querySelector('#LastSyncStatus').textContent = '';
+                        page().querySelector('#LastSyncStatus').textContent = 'Last sync: unavailable';
+                        page().querySelector('#LiveChannelsCached').textContent = 'Live channels cached: unavailable';
+                        page().querySelector('#VodItemsCached').textContent = 'VOD items cached: unavailable';
+                        page().querySelector('#SeriesCached').textContent = 'Series cached: unavailable';
+                        page().querySelector('#EpisodesCached').textContent = 'Episodes cached: unavailable';
+                        page().querySelector('#SyncDuration').textContent = 'Sync duration: unavailable';
+                        page().querySelector('#LastSyncError').textContent = 'Last error: unavailable';
                     });
                 }
 

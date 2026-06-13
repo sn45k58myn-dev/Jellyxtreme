@@ -59,7 +59,9 @@ public sealed class XtreamCacheService
             document.VodItems.Count,
             document.SeriesItems.Count,
             document.SeriesItems.Sum(series => series.Seasons.Sum(season => season.Episodes.Count)),
-            document.XmlTv is not null && File.Exists(GetXmlTvPath()));
+            document.XmlTv is not null && File.Exists(GetXmlTvPath()),
+            Plugin.Instance?.Configuration.LastSyncDurationMs,
+            Plugin.Instance?.Configuration.LastSyncError);
     }
 
     public async Task<XtreamCategoryCache> GetCategoryCacheAsync(CancellationToken cancellationToken)

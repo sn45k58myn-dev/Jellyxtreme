@@ -22,6 +22,8 @@ public sealed class XtreamCoreTests
         Assert.Empty(config.SelectedVodCategoryIds);
         Assert.Empty(config.SelectedSeriesCategoryIds);
         Assert.Null(config.LastSuccessfulSyncUtc);
+        Assert.Null(config.LastSyncDurationMs);
+        Assert.Empty(config.LastSyncError);
     }
 
     [Theory]

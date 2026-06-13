@@ -19,6 +19,8 @@ namespace Jellyxtreme.Configuration
         public int SyncIntervalHours { get; set; } = 12;
         public int CacheMinutes { get; set; } = 60;
         public DateTimeOffset? LastSuccessfulSyncUtc { get; set; }
+        public long? LastSyncDurationMs { get; set; }
+        public string LastSyncError { get; set; } = string.Empty;
 
         public PluginConfiguration()
         {

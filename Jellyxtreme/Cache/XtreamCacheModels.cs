@@ -79,7 +79,9 @@ public sealed record XtreamCacheSummary(
     int VodItemCount,
     int SeriesItemCount,
     int EpisodeItemCount,
-    bool HasXmlTv);
+    bool HasXmlTv,
+    long? LastSyncDurationMs,
+    string? LastSyncError);
 
 public sealed record XtreamCategoryCache(
     IReadOnlyList<CachedCategory> Live,
