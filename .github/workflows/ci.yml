@@ -36,5 +36,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Jellyxtreme-plugin
-          path: artifacts/Jellyxtreme-*.zip
+          name: Jellyxtreme-release
+          path: artifacts/Jellyxtreme-v*.zip
+          if-no-files-found: error

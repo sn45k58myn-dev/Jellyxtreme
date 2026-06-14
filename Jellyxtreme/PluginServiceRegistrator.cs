@@ -3,6 +3,7 @@ using Jellyxtreme.Controllers;
 using Jellyxtreme.Api;
 using Jellyxtreme.Providers;
 using Jellyxtreme.Services;
+using Jellyxtreme.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Channels;
 using MediaBrowser.Controller.LiveTv;
@@ -16,8 +17,18 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
 {
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
+        serviceCollection.AddSingleton<ConfigCredentialStore>();
+        serviceCollection.AddSingleton<EncryptedCredentialStore>();
+        serviceCollection.AddSingleton<ICredentialStore>(provider =>
+        {
+            if (Plugin.Instance?.Configuration is not null && Plugin.Instance.Configuration.UseEncryptedCredentials)
+            {
+                return provider.GetRequiredService<EncryptedCredentialStore>();
+            }
+
+            return provider.GetRequiredService<ConfigCredentialStore>();
+        });
         serviceCollection.AddSingleton<XtreamApiClient>();
-        serviceCollection.AddSingleton<ICredentialStore, ConfigCredentialStore>();
         serviceCollection.AddSingleton<XtreamCacheService>();
         serviceCollection.AddSingleton<XmlTvCacheService>();
         serviceCollection.AddSingleton<XtreamCacheRefreshService>();

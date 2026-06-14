@@ -26,7 +26,7 @@ $targetFramework = 'net9.0'
 $outputDir = Join-Path $repoRoot "Jellyxtreme\bin\$Configuration\$targetFramework"
 $artifactDir = Join-Path $repoRoot 'artifacts'
 $stagingDir = Join-Path $artifactDir 'Jellyxtreme'
-$zipPath = Join-Path $artifactDir "Jellyxtreme-$version.zip"
+$zipPath = Join-Path $artifactDir "Jellyxtreme-v$version.zip"
 
 Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
@@ -44,4 +44,23 @@ if ($IncludeSymbols) {
 
 Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $stagingDir '*') -DestinationPath $zipPath -Force
+
+$entries = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+try {
+    $entryNames = $entries.Entries | ForEach-Object { $_.FullName } | Sort-Object
+    $expected = @('Jellyxtreme.dll', 'plugin.json')
+    if ($IncludeSymbols) {
+        $expected += 'Jellyxtreme.pdb'
+    }
+
+    $expected = $expected | Sort-Object
+    $matches = Compare-Object -ReferenceObject $expected -DifferenceObject $entryNames
+    if ($matches) {
+        throw "Invalid package contents. Expected: $($expected -join ', '). Found: $($entryNames -join ', ')."
+    }
+}
+finally {
+    $entries.Dispose()
+}
+
 Write-Host "Created $zipPath"
