@@ -5,6 +5,7 @@ namespace Jellyxtreme.Cache;
 
 public sealed class XtreamCacheService
 {
+    private const int CurrentCacheVersion = 1;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly ILogger<XtreamCacheService> _logger;
     private readonly string? _cacheDirectory;
@@ -28,18 +29,39 @@ public sealed class XtreamCacheService
             return new XtreamCacheDocument();
         }
 
-        await using var stream = File.OpenRead(path);
-        return await JsonSerializer.DeserializeAsync<XtreamCacheDocument>(stream, JsonOptions, cancellationToken).ConfigureAwait(false)
-            ?? new XtreamCacheDocument();
+        try
+        {
+            return NormalizeCacheDocument(await LoadFromPathAsync(path, cancellationToken).ConfigureAwait(false));
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "JellyXtreme cache could not be loaded; trying backup cache.");
+            var backupPath = GetBackupCachePath();
+            if (!File.Exists(backupPath))
+            {
+                return new XtreamCacheDocument();
+            }
+
+            try
+            {
+                return NormalizeCacheDocument(await LoadFromPathAsync(backupPath, cancellationToken).ConfigureAwait(false));
+            }
+            catch (Exception backupEx) when (backupEx is JsonException or IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(backupEx, "JellyXtreme backup cache could not be loaded.");
+                return new XtreamCacheDocument();
+            }
+        }
     }
 
     public async Task SaveAsync(XtreamCacheDocument document, CancellationToken cancellationToken)
     {
         var path = GetCachePath();
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        document.CacheVersion = Math.Max(1, document.CacheVersion);
+        document.CacheVersion = CurrentCacheVersion;
 
         var tempPath = path + ".tmp";
+        var backupPath = GetBackupCachePath();
         await using (var stream = File.Create(tempPath))
         {
             await JsonSerializer.SerializeAsync(stream, document, JsonOptions, cancellationToken).ConfigureAwait(false);
@@ -47,7 +69,7 @@ public sealed class XtreamCacheService
 
         if (File.Exists(path))
         {
-            File.Replace(tempPath, path, null);
+            File.Replace(tempPath, path, backupPath);
         }
         else
         {
@@ -69,6 +91,7 @@ public sealed class XtreamCacheService
             document.LiveCategories.Count,
             document.VodCategories.Count,
             document.SeriesCategories.Count,
+            document.CacheVersion,
             document.LiveChannels.Count,
             document.VodItems.Count,
             document.SeriesItems.Count,
@@ -87,6 +110,9 @@ public sealed class XtreamCacheService
     private string GetCachePath()
         => Path.Combine(GetCacheDirectory(), "xtream-cache.json");
 
+    private string GetBackupCachePath()
+        => Path.Combine(GetCacheDirectory(), "xtream-cache.backup.json");
+
     public string GetXmlTvPath()
         => Path.Combine(GetCacheDirectory(), "xmltv.xml");
 
@@ -99,5 +125,22 @@ public sealed class XtreamCacheService
         }
 
         return dataPath;
+    }
+
+    private static async Task<XtreamCacheDocument?> LoadFromPathAsync(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(path);
+        return await JsonSerializer.DeserializeAsync<XtreamCacheDocument>(stream, JsonOptions, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static XtreamCacheDocument NormalizeCacheDocument(XtreamCacheDocument? document)
+    {
+        document ??= new XtreamCacheDocument();
+        if (document.CacheVersion <= 0 || document.CacheVersion > CurrentCacheVersion)
+        {
+            document.CacheVersion = CurrentCacheVersion;
+        }
+
+        return document;
     }
 }

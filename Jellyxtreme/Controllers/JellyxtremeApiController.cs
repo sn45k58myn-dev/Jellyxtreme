@@ -4,9 +4,11 @@ using Jellyxtreme.Configuration;
 using Jellyxtreme.Providers;
 using Jellyxtreme.Services;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using MediaBrowser.Model.Dto;
+using System.Net;
 
 namespace Jellyxtreme.Controllers;
 
@@ -20,19 +22,28 @@ public sealed class JellyxtremeApiController : ControllerBase
     private readonly XtreamCacheService _cacheService;
     private readonly VodProvider _vodProvider;
     private readonly SeriesProvider _seriesProvider;
+    private readonly StreamResolverService _streamResolver;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ILogger<JellyxtremeApiController> _logger;
 
     public JellyxtremeApiController(
         XtreamApiClient apiClient,
         XtreamCacheRefreshService cacheRefreshService,
         XtreamCacheService cacheService,
         VodProvider vodProvider,
-        SeriesProvider seriesProvider)
+        SeriesProvider seriesProvider,
+        StreamResolverService streamResolver,
+        IHttpClientFactory httpClientFactory,
+        ILogger<JellyxtremeApiController> logger)
     {
         _apiClient = apiClient;
         _cacheRefreshService = cacheRefreshService;
         _cacheService = cacheService;
         _vodProvider = vodProvider;
         _seriesProvider = seriesProvider;
+        _streamResolver = streamResolver;
+        _httpClientFactory = httpClientFactory;
+        _logger = logger;
     }
 
     [HttpPost("TestConnection")]
@@ -80,6 +91,104 @@ public sealed class JellyxtremeApiController : ControllerBase
     public async Task<ActionResult<XtreamCacheSummary>> GetCacheSummary(CancellationToken cancellationToken)
     {
         return Ok(await _cacheService.GetSummaryAsync(cancellationToken).ConfigureAwait(false));
+    }
+
+    [AllowAnonymous]
+    [HttpGet("Live/{streamId:int}.{extension}")]
+    public async Task<IActionResult> ProxyLiveStream(
+        [FromRoute] int streamId,
+        [FromRoute] string extension,
+        CancellationToken cancellationToken)
+    {
+        if (!IsLoopbackRequest(HttpContext.Connection.RemoteIpAddress))
+        {
+            _logger.LogWarning("Rejected non-local JellyXtreme live proxy request for stream {StreamId}.", streamId);
+            return NotFound();
+        }
+
+        if (streamId <= 0)
+        {
+            return BadRequest(new { Message = "Stream ID must be greater than zero." });
+        }
+
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            return BadRequest(new { Message = "Stream extension is required." });
+        }
+
+        var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var channel = cache.LiveChannels.FirstOrDefault(item => item.StreamId == streamId);
+        if (channel is null)
+        {
+            return NotFound();
+        }
+
+        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        string streamUrl;
+        try
+        {
+            streamUrl = _streamResolver.ResolveLiveUrl(config, channel.StreamId, channel.StreamExtension);
+        }
+        catch (XtreamValidationException exception)
+        {
+            _logger.LogWarning("JellyXtreme live proxy rejected invalid playback configuration for stream {StreamId}: {Message}", streamId, exception.Message);
+            return BadRequest(new { Message = "Live playback configuration is invalid." });
+        }
+
+        try
+        {
+            var client = _httpClientFactory.CreateClient(nameof(JellyxtremeApiController));
+            var upstreamRequest = new HttpRequestMessage(HttpMethod.Get, streamUrl);
+            ApplyStreamRequestHeaders(upstreamRequest);
+            var upstreamResponse = await client.SendAsync(
+                upstreamRequest,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken).ConfigureAwait(false);
+
+            if (!upstreamResponse.IsSuccessStatusCode)
+            {
+                upstreamResponse.Dispose();
+                _logger.LogWarning(
+                    "JellyXtreme live proxy upstream request failed for stream {StreamId} with status {StatusCode}.",
+                    streamId,
+                    (int)upstreamResponse.StatusCode);
+                return StatusCode(StatusCodes.Status502BadGateway, new { Message = "Unable to open upstream live stream." });
+            }
+
+            HttpContext.Response.RegisterForDispose(upstreamResponse);
+            var contentType = string.Equals(extension, "m3u8", StringComparison.OrdinalIgnoreCase)
+                ? "application/vnd.apple.mpegurl"
+                : "video/MP2T";
+            var stream = await upstreamResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            return File(stream, contentType, enableRangeProcessing: false);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            _logger.LogWarning("JellyXtreme live proxy could not open upstream stream {StreamId}.", streamId);
+            return StatusCode(StatusCodes.Status502BadGateway, new { Message = "Unable to open upstream live stream." });
+        }
+    }
+
+    private static void ApplyStreamRequestHeaders(HttpRequestMessage request)
+    {
+        request.Headers.UserAgent.TryParseAdd("VLC/3.0.20 LibVLC/3.0.20");
+        request.Headers.Accept.TryParseAdd("*/*");
+    }
+
+    private static bool IsLoopbackRequest(IPAddress? remoteIpAddress)
+    {
+        if (remoteIpAddress is null)
+        {
+            return false;
+        }
+
+        if (IPAddress.IsLoopback(remoteIpAddress))
+        {
+            return true;
+        }
+
+        return remoteIpAddress.IsIPv4MappedToIPv6
+            && IPAddress.IsLoopback(remoteIpAddress.MapToIPv4());
     }
 
     [HttpGet("Vod")]

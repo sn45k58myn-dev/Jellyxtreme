@@ -28,12 +28,20 @@ Only connect Jellyxtreme to lawful and authorised Xtream providers. You are resp
 Install the .NET 9 SDK, then run:
 
 ```powershell
-dotnet restore .\Jellyxtreme\Jellyxtreme.csproj
-dotnet build .\Jellyxtreme\Jellyxtreme.csproj
-dotnet test .\Jellyxtreme.Tests\Jellyxtreme.Tests.csproj
+dotnet restore .\Jellyxtreme.sln
+dotnet build .\Jellyxtreme.sln
+dotnet test .\Jellyxtreme.sln
 ```
 
 The plugin assembly is produced under `Jellyxtreme/bin/<Configuration>/net9.0/`. For a debug build, copy from `Jellyxtreme/bin/Debug/net9.0/`; for a release build, copy from `Jellyxtreme/bin/Release/net9.0/`.
+
+To create an installable release package:
+
+```powershell
+.\scripts\package.ps1 -Configuration Release
+```
+
+The package is written to `artifacts/Jellyxtreme-<version>.zip` and contains `Jellyxtreme.dll` plus `plugin.json`.
 
 ## Install
 
@@ -60,7 +68,7 @@ If no categories are selected, Jellyxtreme imports nothing. If only one section 
 ## Architecture
 
 - `Api/XtreamApiClient.cs` contains authenticated Xtream API calls for categories, streams, series info, and XMLTV.
-- `Cache/` contains `XtreamCacheService`, the provider cache document, category caches, cached live channels, VOD items, series items, and episode items. Cache files are versioned and written atomically by writing a temporary file before replacing the previous cache.
+- `Cache/` contains `XtreamCacheService`, the provider cache document, category caches, cached live channels, VOD items, series items, and episode items. Cache files are versioned, written atomically by writing a temporary file before replacing the previous cache, and restored from a backup cache if the primary JSON cannot be read.
 - `Services/XtreamCacheRefreshService.cs` refreshes selected categories only.
 - Series refresh calls `get_series` first, then calls `get_series_info` for every valid series returned before caching only selected category results. Series info requests are throttled to five concurrent requests.
 - `Services/StreamResolverService.cs` resolves authenticated Xtream URLs only at playback time.
@@ -70,6 +78,7 @@ If no categories are selected, Jellyxtreme imports nothing. If only one section 
 - `Configuration/configPage.html` is the embedded admin page.
 - `Tasks/XtreamSyncTask.cs` exposes the manual scheduled cache refresh task.
 - `Jellyxtreme.Tests/` covers URL building, category filtering, section cache policy, credential redaction, resolver paths, and config defaults.
+- `.github/workflows/ci.yml` runs restore, release build, tests, and release packaging on GitHub Actions.
 
 Sensitive values are kept out of logs. Server URLs are validated as absolute `http` or `https` URLs, and authenticated stream URLs are resolved only when playback/provider code requests them. Passwords are currently stored in plugin configuration; future work should move them to encrypted or Jellyfin-managed secret storage when a stable plugin API is available.
 

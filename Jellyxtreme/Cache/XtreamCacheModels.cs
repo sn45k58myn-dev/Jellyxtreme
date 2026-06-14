@@ -76,6 +76,7 @@ public sealed record XtreamCacheSummary(
     int LiveCategoryCount,
     int VodCategoryCount,
     int SeriesCategoryCount,
+    int CacheVersion,
     int LiveChannelCount,
     int VodItemCount,
     int SeriesItemCount,

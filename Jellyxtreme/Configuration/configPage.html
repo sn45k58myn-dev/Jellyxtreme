@@ -46,6 +46,7 @@
                         <div id="VodItemsCached">VOD items cached: 0</div>
                         <div id="SeriesCached">Series cached: 0</div>
                         <div id="EpisodesCached">Episodes cached: 0</div>
+                        <div id="CacheVersion">Cache version: unknown</div>
                         <div id="SyncDuration">Sync duration: none</div>
                         <div id="LastSyncError">Last error: none</div>
                     </div>
@@ -156,15 +157,43 @@
                         type: 'POST',
                         url: ApiClient.getUrl(path),
                         data: JSON.stringify(payload),
-                        contentType: 'application/json'
-                    });
+                        contentType: 'application/json',
+                        dataType: 'json',
+                        headers: {
+                            Accept: 'application/json'
+                        }
+                    }).then(parseJsonResponse);
                 }
 
                 function getJson(path) {
                     return ApiClient.ajax({
                         type: 'GET',
-                        url: ApiClient.getUrl(path)
-                    });
+                        url: ApiClient.getUrl(path),
+                        dataType: 'json',
+                        headers: {
+                            Accept: 'application/json'
+                        }
+                    }).then(parseJsonResponse);
+                }
+
+                function parseJsonResponse(response) {
+                    if (response && response.responseJSON) {
+                        return response.responseJSON;
+                    }
+
+                    if (response && typeof response.responseText === 'string') {
+                        return parseJsonResponse(response.responseText);
+                    }
+
+                    if (typeof response !== 'string') {
+                        return response;
+                    }
+
+                    try {
+                        return JSON.parse(response);
+                    } catch (_) {
+                        return response;
+                    }
                 }
 
                 function ajaxErrorMessage(error, fallback) {
@@ -238,12 +267,14 @@
                         var vod = field(summary, 'VodItemCount', 'vodItemCount') || 0;
                         var series = field(summary, 'SeriesItemCount', 'seriesItemCount') || 0;
                         var episodes = field(summary, 'EpisodeItemCount', 'episodeItemCount') || 0;
+                        var cacheVersion = field(summary, 'CacheVersion', 'cacheVersion') || 'unknown';
                         var sync = field(summary, 'LastSuccessfulSyncUtc', 'lastSuccessfulSyncUtc') || field(summary, 'RefreshedAt', 'refreshedAt');
                         page().querySelector('#LastSyncStatus').textContent = sync ? 'Last sync: ' + new Date(sync).toLocaleString() : 'Last sync: never';
                         page().querySelector('#LiveChannelsCached').textContent = 'Live channels cached: ' + live;
                         page().querySelector('#VodItemsCached').textContent = 'VOD items cached: ' + vod;
                         page().querySelector('#SeriesCached').textContent = 'Series cached: ' + series;
                         page().querySelector('#EpisodesCached').textContent = 'Episodes cached: ' + episodes;
+                        page().querySelector('#CacheVersion').textContent = 'Cache version: ' + cacheVersion;
                         page().querySelector('#SyncDuration').textContent = 'Sync duration: ' + formatDuration(field(summary, 'LastSyncDurationMs', 'lastSyncDurationMs'));
 
                         var lastError = field(summary, 'LastSyncError', 'lastSyncError') || '';
@@ -254,6 +285,7 @@
                         page().querySelector('#VodItemsCached').textContent = 'VOD items cached: unavailable';
                         page().querySelector('#SeriesCached').textContent = 'Series cached: unavailable';
                         page().querySelector('#EpisodesCached').textContent = 'Episodes cached: unavailable';
+                        page().querySelector('#CacheVersion').textContent = 'Cache version: unavailable';
                         page().querySelector('#SyncDuration').textContent = 'Sync duration: unavailable';
                         page().querySelector('#LastSyncError').textContent = 'Last error: unavailable';
                     });
@@ -275,8 +307,8 @@
                     container.innerHTML = '';
 
                     (categories || []).forEach(function (category) {
-                        var id = category.CategoryId || category.categoryId || '';
-                        var name = category.CategoryName || category.categoryName || id;
+                        var id = category.CategoryId || category.categoryId || category.category_id || '';
+                        var name = category.CategoryName || category.categoryName || category.category_name || category.Name || category.name || id;
                         if (!id) {
                             return;
                         }
@@ -378,7 +410,9 @@
 
                     Dashboard.showLoadingMsg();
                     postJson('Jellyxtreme/TestConnection', payload).then(function (result) {
-                        page().querySelector('#ConnectionStatus').textContent = result.IsSuccess || result.isSuccess ? 'Connection successful.' : (result.Message || result.message || 'Connection failed.');
+                        var isSuccess = field(result || {}, 'IsSuccess', 'isSuccess') === true;
+                        var message = field(result || {}, 'Message', 'message') || (isSuccess ? 'Connection successful.' : 'Connection failed.');
+                        page().querySelector('#ConnectionStatus').textContent = isSuccess ? 'Connection successful.' : message;
                         Dashboard.hideLoadingMsg();
                     }).catch(function (error) {
                         page().querySelector('#ConnectionStatus').textContent = ajaxErrorMessage(error, 'Connection failed.');

@@ -1,3 +1,4 @@
 # Build directories
 **/bin/
 **/obj/
+artifacts/

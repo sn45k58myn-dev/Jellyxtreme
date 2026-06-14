@@ -4,6 +4,7 @@ using Jellyxtreme.Configuration;
 using Jellyxtreme.Controllers;
 using Jellyxtreme.Providers;
 using Jellyxtreme.Services;
+using MediaBrowser.Model.LiveTv;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.Json;
@@ -215,6 +216,8 @@ public sealed class XtreamCoreTests
             cache,
             xmlTvCache,
             new StreamResolverService(apiClient),
+            new TestHttpClientFactory(),
+            NullLogger<JellyfinLiveTvProvider>.Instance,
             () => new PluginConfiguration
             {
                 ServerUrl = "https://provider.example",
@@ -231,9 +234,22 @@ public sealed class XtreamCoreTests
         Assert.Equal("news.example", channels[0].CallSign);
         Assert.Equal("News", channels[0].ChannelGroup);
         Assert.Equal("42", channels[0].Id);
+        Assert.Equal("jellyxtreme", channels[0].TunerHostId);
         Assert.Contains("category:7", channels[0].Tags);
         Assert.Single(mediaSources);
-        Assert.Equal("https://provider.example/live/user/secret/42.ts", mediaSources[0].Path);
+        Assert.Equal("http://127.0.0.1:8096/Jellyxtreme/Live/42.ts", mediaSources[0].Path);
+        Assert.False(string.IsNullOrWhiteSpace(mediaSources[0].OpenToken));
+        Assert.True(mediaSources[0].RequiresOpening);
+        Assert.Null(mediaSources[0].LiveStreamId);
+        Assert.NotNull(mediaSources[0].MediaStreams);
+        Assert.NotNull(mediaSources[0].MediaAttachments);
+        Assert.NotNull(mediaSources[0].Formats);
+        Assert.NotNull(mediaSources[0].RequiredHttpHeaders);
+        Assert.Equal("mpegts", mediaSources[0].Container);
+        Assert.Empty(mediaSources[0].MediaStreams);
+        Assert.Null(mediaSources[0].DefaultAudioStreamIndex);
+        Assert.True(mediaSources[0].ReadAtNativeFramerate);
+        Assert.True(mediaSources[0].IgnoreDts);
     }
 
     [Fact]
@@ -316,6 +332,28 @@ public sealed class XtreamCoreTests
 
         Assert.Equal(1, loaded.CacheVersion);
         Assert.False(File.Exists(Path.Combine(cacheDirectory, "xtream-cache.json.tmp")));
+    }
+
+    [Fact]
+    public async Task CacheLoadFallsBackToBackupWhenPrimaryJsonIsCorrupt()
+    {
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N"));
+        var cache = new XtreamCacheService(NullLogger<XtreamCacheService>.Instance, cacheDirectory);
+
+        await cache.SaveAsync(new XtreamCacheDocument
+        {
+            LiveChannels = [new CachedLiveChannel { Name = "Known Good", StreamId = 12 }]
+        }, CancellationToken.None);
+        await cache.SaveAsync(new XtreamCacheDocument
+        {
+            LiveChannels = [new CachedLiveChannel { Name = "Current", StreamId = 99 }]
+        }, CancellationToken.None);
+
+        await File.WriteAllTextAsync(Path.Combine(cacheDirectory, "xtream-cache.json"), "{bad json", CancellationToken.None);
+        var loaded = await cache.LoadAsync(CancellationToken.None);
+
+        Assert.Single(loaded.LiveChannels);
+        Assert.Equal("Known Good", loaded.LiveChannels[0].Name);
     }
 
     [Fact]
@@ -434,8 +472,15 @@ public sealed class XtreamCoreTests
             cache,
             xmlTvCache,
             new StreamResolverService(apiClient),
+            new TestHttpClientFactory(),
+            NullLogger<JellyfinLiveTvProvider>.Instance,
             () => new PluginConfiguration());
-        var programs = (await provider.GetProgramsAsync("42", new DateTime(2026, 6, 13, 8, 0, 0, DateTimeKind.Utc), new DateTime(2026, 6, 13, 11, 0, 0, DateTimeKind.Utc), CancellationToken.None)).ToList();
+        var programs = (await provider.GetProgramsAsync(
+            new ListingsProviderInfo { Type = "jellyxtreme" },
+            "42",
+            new DateTime(2026, 6, 13, 8, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 6, 13, 11, 0, 0, DateTimeKind.Utc),
+            CancellationToken.None)).ToList();
 
         Assert.Single(programs);
         Assert.Equal("Morning News", programs[0].Name);
@@ -462,7 +507,10 @@ public sealed class XtreamCoreTests
                 NullLogger<XtreamCacheRefreshService>.Instance),
             cache,
             new VodProvider(cache, resolver, () => new PluginConfiguration()),
-            new SeriesProvider(cache, resolver, () => new PluginConfiguration()));
+            new SeriesProvider(cache, resolver, () => new PluginConfiguration()),
+            resolver,
+            new TestHttpClientFactory(),
+            NullLogger<JellyxtremeApiController>.Instance);
     }
 
     private static string FindRepositoryRoot()
