@@ -23,6 +23,7 @@ public sealed class JellyxtremeApiController : ControllerBase
     private readonly VodProvider _vodProvider;
     private readonly SeriesProvider _seriesProvider;
     private readonly StreamResolverService _streamResolver;
+    private readonly ICredentialStore _credentialStore;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<JellyxtremeApiController> _logger;
 
@@ -33,6 +34,7 @@ public sealed class JellyxtremeApiController : ControllerBase
         VodProvider vodProvider,
         SeriesProvider seriesProvider,
         StreamResolverService streamResolver,
+        ICredentialStore credentialStore,
         IHttpClientFactory httpClientFactory,
         ILogger<JellyxtremeApiController> logger)
     {
@@ -42,6 +44,7 @@ public sealed class JellyxtremeApiController : ControllerBase
         _vodProvider = vodProvider;
         _seriesProvider = seriesProvider;
         _streamResolver = streamResolver;
+        _credentialStore = credentialStore;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
@@ -51,14 +54,12 @@ public sealed class JellyxtremeApiController : ControllerBase
         [FromBody] XtreamConnectionRequest request,
         CancellationToken cancellationToken)
     {
-        if (!IsValidRequest(request, out var validationMessage))
+        if (!TryBuildSettings(request, out var settings, out var validationMessage))
         {
             return BadRequest(new XtreamConnectionResult(false, validationMessage));
         }
 
-        return Ok(await _apiClient.TestConnectionAsync(
-            XtreamConnectionSettings.FromRequest(request.ServerUrl, request.Username, request.Password),
-            cancellationToken).ConfigureAwait(false));
+        return Ok(await _apiClient.TestConnectionAsync(settings, cancellationToken).ConfigureAwait(false));
     }
 
     [HttpPost("Categories")]
@@ -66,19 +67,20 @@ public sealed class JellyxtremeApiController : ControllerBase
         [FromBody] XtreamConnectionRequest request,
         CancellationToken cancellationToken)
     {
-        if (!IsValidRequest(request, out var validationMessage))
+        if (!TryBuildSettings(request, out var settings, out var validationMessage))
         {
             return BadRequest(new { Message = validationMessage });
         }
 
-        var config = new PluginConfiguration
+        if (HasInlineCredentials(request) || !string.IsNullOrWhiteSpace(request.ProviderId))
         {
-            ServerUrl = request.ServerUrl,
-            Username = request.Username,
-            Password = request.Password
-        };
+            return Ok(await GetProviderCategorySnapshotAsync(
+                settings,
+                XtreamCacheIdentity.NormalizeProviderId(request.ProviderId),
+                cancellationToken).ConfigureAwait(false));
+        }
 
-        return Ok(await _cacheRefreshService.GetCategoriesAsync(config, cancellationToken).ConfigureAwait(false));
+        return Ok(await _cacheRefreshService.GetCategoriesAsync(Plugin.Instance?.Configuration ?? new PluginConfiguration(), cancellationToken).ConfigureAwait(false));
     }
 
     [HttpGet("Categories")]
@@ -95,7 +97,9 @@ public sealed class JellyxtremeApiController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet("Live/{streamId:int}.{extension}")]
+    [HttpGet("Live/{providerId}/{streamId:int}.{extension}")]
     public async Task<IActionResult> ProxyLiveStream(
+        [FromRoute] string? providerId,
         [FromRoute] int streamId,
         [FromRoute] string extension,
         CancellationToken cancellationToken)
@@ -117,7 +121,10 @@ public sealed class JellyxtremeApiController : ControllerBase
         }
 
         var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
-        var channel = cache.LiveChannels.FirstOrDefault(item => item.StreamId == streamId);
+        var channel = cache.LiveChannels.FirstOrDefault(item =>
+            item.StreamId == streamId
+            && (string.IsNullOrWhiteSpace(providerId)
+                || string.Equals(item.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)));
         if (channel is null)
         {
             return NotFound();
@@ -127,11 +134,15 @@ public sealed class JellyxtremeApiController : ControllerBase
         string streamUrl;
         try
         {
-            streamUrl = _streamResolver.ResolveLiveUrl(config, channel.StreamId, channel.StreamExtension);
+            streamUrl = _streamResolver.ResolveLiveUrl(config, channel.ProviderId, channel.StreamId, channel.StreamExtension);
         }
         catch (XtreamValidationException exception)
         {
-            _logger.LogWarning("JellyXtreme live proxy rejected invalid playback configuration for stream {StreamId}: {Message}", streamId, exception.Message);
+            _logger.LogWarning(
+                "JellyXtreme live proxy rejected invalid playback configuration for provider/stream {ProviderId}/{StreamId}: {Message}",
+                channel.ProviderId,
+                streamId,
+                exception.Message);
             return BadRequest(new { Message = "Live playback configuration is invalid." });
         }
 
@@ -149,7 +160,8 @@ public sealed class JellyxtremeApiController : ControllerBase
             {
                 upstreamResponse.Dispose();
                 _logger.LogWarning(
-                    "JellyXtreme live proxy upstream request failed for stream {StreamId} with status {StatusCode}.",
+                    "JellyXtreme live proxy upstream request failed for provider/stream {ProviderId}/{StreamId} with status {StatusCode}.",
+                    channel.ProviderId,
                     streamId,
                     (int)upstreamResponse.StatusCode);
                 return StatusCode(StatusCodes.Status502BadGateway, new { Message = "Unable to open upstream live stream." });
@@ -164,7 +176,7 @@ public sealed class JellyxtremeApiController : ControllerBase
         }
         catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or OperationCanceledException)
         {
-            _logger.LogWarning("JellyXtreme live proxy could not open upstream stream {StreamId}.", streamId);
+            _logger.LogWarning("JellyXtreme live proxy could not open upstream stream {ProviderId}/{StreamId}.", providerId, streamId);
             return StatusCode(StatusCodes.Status502BadGateway, new { Message = "Unable to open upstream live stream." });
         }
     }
@@ -205,6 +217,7 @@ public sealed class JellyxtremeApiController : ControllerBase
     public async Task<ActionResult<IReadOnlyList<MediaSourceInfo>>> GetVodMediaSources(
         [FromRoute] int streamId,
         [FromQuery] bool includePlaybackUrl,
+        [FromQuery] string? providerId,
         CancellationToken cancellationToken)
     {
         if (streamId <= 0)
@@ -217,7 +230,7 @@ public sealed class JellyxtremeApiController : ControllerBase
             return BadRequest(new { Message = "Set includePlaybackUrl=true to explicitly request authenticated playback URLs." });
         }
 
-        var mediaSources = await _vodProvider.GetMediaSourcesAsync(streamId, cancellationToken).ConfigureAwait(false);
+        var mediaSources = await _vodProvider.GetMediaSourcesAsync(streamId, providerId, cancellationToken).ConfigureAwait(false);
         return mediaSources.Count == 0 ? NotFound() : Ok(mediaSources);
     }
 
@@ -236,6 +249,7 @@ public sealed class JellyxtremeApiController : ControllerBase
         [FromRoute] int seriesId,
         [FromQuery] int startIndex,
         [FromQuery] int limit,
+        [FromQuery] string? providerId,
         CancellationToken cancellationToken)
     {
         if (seriesId <= 0)
@@ -243,7 +257,7 @@ public sealed class JellyxtremeApiController : ControllerBase
             return BadRequest(new { Message = "Series ID must be greater than zero." });
         }
 
-        var episodes = await _seriesProvider.GetEpisodesAsync(seriesId, cancellationToken).ConfigureAwait(false);
+        var episodes = await _seriesProvider.GetEpisodesAsync(seriesId, providerId, cancellationToken).ConfigureAwait(false);
         return Ok(Page(episodes, startIndex, limit));
     }
 
@@ -251,6 +265,7 @@ public sealed class JellyxtremeApiController : ControllerBase
     public async Task<ActionResult<IReadOnlyList<MediaSourceInfo>>> GetSeriesEpisodeMediaSources(
         [FromRoute] int episodeStreamId,
         [FromQuery] bool includePlaybackUrl,
+        [FromQuery] string? providerId,
         CancellationToken cancellationToken)
     {
         if (episodeStreamId <= 0)
@@ -263,32 +278,8 @@ public sealed class JellyxtremeApiController : ControllerBase
             return BadRequest(new { Message = "Set includePlaybackUrl=true to explicitly request authenticated playback URLs." });
         }
 
-        var mediaSources = await _seriesProvider.GetEpisodeMediaSourcesAsync(episodeStreamId, cancellationToken).ConfigureAwait(false);
+        var mediaSources = await _seriesProvider.GetEpisodeMediaSourcesAsync(episodeStreamId, providerId, cancellationToken).ConfigureAwait(false);
         return mediaSources.Count == 0 ? NotFound() : Ok(mediaSources);
-    }
-
-    private static bool IsValidRequest(XtreamConnectionRequest? request, out string validationMessage)
-    {
-        if (request is null)
-        {
-            validationMessage = "Connection details are required.";
-            return false;
-        }
-
-        if (!XtreamApiClient.TryNormalizeServerUrl(request.ServerUrl, out _))
-        {
-            validationMessage = "Server URL must be an absolute http or https URL.";
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password))
-        {
-            validationMessage = "Username and password are required.";
-            return false;
-        }
-
-        validationMessage = string.Empty;
-        return true;
     }
 
     private static PagedResult<T> Page<T>(IReadOnlyList<T> items, int startIndex, int limit)
@@ -301,9 +292,120 @@ public sealed class JellyxtremeApiController : ControllerBase
             safeStart,
             safeLimit);
     }
+
+    private async Task<XtreamCategorySnapshot> GetProviderCategorySnapshotAsync(
+        XtreamConnectionSettings settings,
+        string providerId,
+        CancellationToken cancellationToken)
+    {
+        var providerKey = XtreamCacheIdentity.NormalizeProviderId(providerId);
+        var liveCategories = await _apiClient.GetLiveCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+        var vodCategories = await _apiClient.GetVodCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+        var seriesCategories = await _apiClient.GetSeriesCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+
+        var seenLive = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenVod = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenSeries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        return new XtreamCategorySnapshot(
+            liveCategories
+                .Where(category => seenLive.Add(XtreamCacheIdentity.BuildItemKey(providerKey, category.CategoryId)))
+                .Select(category => new CachedCategory
+                {
+                    ProviderId = providerKey,
+                    CategoryId = category.CategoryId,
+                    Name = category.CategoryName,
+                    Kind = "live"
+                })
+                .ToList(),
+            vodCategories
+                .Where(category => seenVod.Add(XtreamCacheIdentity.BuildItemKey(providerKey, category.CategoryId)))
+                .Select(category => new CachedCategory
+                {
+                    ProviderId = providerKey,
+                    CategoryId = category.CategoryId,
+                    Name = category.CategoryName,
+                    Kind = "vod"
+                }).ToList(),
+            seriesCategories
+                .Where(category => seenSeries.Add(XtreamCacheIdentity.BuildItemKey(providerKey, category.CategoryId)))
+                .Select(category => new CachedCategory
+                {
+                    ProviderId = providerKey,
+                    CategoryId = category.CategoryId,
+                    Name = category.CategoryName,
+                    Kind = "series"
+                }).ToList());
+    }
+
+    private static bool HasInlineCredentials(XtreamConnectionRequest? request)
+    {
+        if (request is null)
+        {
+            return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(request.ServerUrl)
+            || !string.IsNullOrWhiteSpace(request.Username)
+            || !string.IsNullOrWhiteSpace(request.Password);
+    }
+
+    private bool TryBuildSettings(
+        XtreamConnectionRequest? request,
+        out XtreamConnectionSettings settings,
+        out string validationMessage)
+    {
+        settings = new XtreamConnectionSettings(string.Empty, string.Empty, string.Empty, TimeSpan.FromMinutes(1));
+        validationMessage = string.Empty;
+
+        if (request is null)
+        {
+            validationMessage = "Connection details are required.";
+            return false;
+        }
+
+        var providerConfig = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        var requestServerUrl = request.ServerUrl?.Trim() ?? string.Empty;
+        var requestUsername = request.Username?.Trim() ?? string.Empty;
+        var requestPassword = request.Password ?? string.Empty;
+        var hasRequestCredentials = !string.IsNullOrWhiteSpace(requestServerUrl)
+            || !string.IsNullOrWhiteSpace(requestUsername)
+            || !string.IsNullOrWhiteSpace(requestPassword);
+
+        if (hasRequestCredentials)
+        {
+            if (!XtreamApiClient.TryNormalizeServerUrl(requestServerUrl, out _))
+            {
+                validationMessage = "Server URL must be an absolute http or https URL.";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(requestUsername) || string.IsNullOrWhiteSpace(requestPassword))
+            {
+                validationMessage = "Username and password are required.";
+                return false;
+            }
+
+            settings = XtreamConnectionSettings.FromRequest(requestServerUrl, requestUsername, requestPassword);
+            return true;
+        }
+
+        if (!_credentialStore.TryGetConnectionSettings(
+            providerConfig,
+            XtreamCacheIdentity.NormalizeProviderId(request.ProviderId),
+            out settings))
+        {
+            validationMessage = string.IsNullOrWhiteSpace(request.ProviderId)
+                ? "Provider credentials are required."
+                : $"Configured provider not found: {request.ProviderId}.";
+            return false;
+        }
+
+        return true;
+    }
 }
 
-public sealed record XtreamConnectionRequest(string ServerUrl, string Username, string Password);
+public sealed record XtreamConnectionRequest(string ServerUrl, string Username, string Password, string? ProviderId = null);
 
 public sealed record PagedResult<T>(
     IReadOnlyList<T> Items,

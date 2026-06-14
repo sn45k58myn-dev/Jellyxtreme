@@ -55,13 +55,19 @@ The package is written to `artifacts/Jellyxtreme-<version>.zip` and contains `Je
 
 ## Configuration
 
-1. Enter the Xtream server URL, username, and password.
+1. Configure one or more providers:
+   - **Provider 1**
+   - **Provider 2**
+   - **Provider 3**
+
+   For each provider, enter server URL, username, and password.
 2. Use **Test Connection** to validate the endpoint.
 3. Use **Refresh Categories** to load Live TV, VOD, and Series categories.
 4. Enable only the sections you want to cache.
-5. Select category checkboxes for each enabled section.
+5. Select category checkboxes for each enabled section (provider sections are merged in UI by category key).
 6. Save the configuration.
-7. Run Dashboard -> Scheduled Tasks -> **JellyXtreme: Refresh Xtream Cache**.
+7. Optionally enable metadata enrichment and add TMDB/TVDB API keys.
+8. Run Dashboard -> Scheduled Tasks -> **JellyXtreme: Refresh Xtream Cache**.
 
 If no categories are selected, Jellyxtreme imports nothing. If only one section is enabled and selected, the other sections are skipped.
 
@@ -69,10 +75,12 @@ If no categories are selected, Jellyxtreme imports nothing. If only one section 
 
 - `Api/XtreamApiClient.cs` contains authenticated Xtream API calls for categories, streams, series info, and XMLTV.
 - `Cache/` contains `XtreamCacheService`, the provider cache document, category caches, cached live channels, VOD items, series items, and episode items. Cache files are versioned, written atomically by writing a temporary file before replacing the previous cache, and restored from a backup cache if the primary JSON cannot be read.
-- `Services/XtreamCacheRefreshService.cs` refreshes selected categories only.
+- `Services/XtreamCacheRefreshService.cs` refreshes selected categories only, and can optionally enrich VOD/Series cache with TMDB/TVDB metadata for posters/fanarts/backdrops.
 - Series refresh calls `get_series` first, then calls `get_series_info` for every valid series returned before caching only selected category results. Series info requests are throttled to five concurrent requests.
 - `Services/StreamResolverService.cs` resolves authenticated Xtream URLs only at playback time.
-- `Providers/` contains Live TV, VOD, and Series provider foundations over the cache.
+- `Providers/` contains Live TV, VOD, Series, and native Jellyfin channel-backed library providers over the cache.
+- `XtreamMovieLibraryProvider` exposes selected cached VOD categories as Jellyfin browseable folders containing movie items.
+- `XtreamSeriesLibraryProvider` exposes selected cached Series categories as Jellyfin browseable folders, then Series -> Seasons -> Episodes.
 - `Controllers/JellyxtremeApiController.cs` exposes authenticated admin endpoints used by the config page: test connection, categories, cache summary, and beta VOD/Series test listing endpoints.
 - `PluginServiceRegistrator.cs` registers the cache, refresh, resolver, and provider services with Jellyfin dependency injection.
 - `Configuration/configPage.html` is the embedded admin page.
@@ -82,7 +90,7 @@ If no categories are selected, Jellyxtreme imports nothing. If only one section 
 
 Sensitive values are kept out of logs. Server URLs are validated as absolute `http` or `https` URLs, and authenticated stream URLs are resolved only when playback/provider code requests them. Passwords are currently stored in plugin configuration; future work should move them to encrypted or Jellyfin-managed secret storage when a stable plugin API is available.
 
-The Live TV foundation is registered as a Jellyfin `ITunerHost`/`IConfigurableTunerHost` and exposes cached channels with playback-time stream resolution. VOD and Series currently expose cached metadata and playback media sources through provider services plus beta admin/test endpoints; full virtual library integration remains a follow-up.
+The Live TV foundation is registered as a Jellyfin `ITunerHost`/`IConfigurableTunerHost` and exposes cached channels with playback-time stream resolution. VOD and Series are registered as Jellyfin channels for native browsing of cached metadata, with media-source callbacks resolving authenticated stream URLs only when playback is requested.
 
 ## Beta Admin/Test Endpoints
 
@@ -102,7 +110,7 @@ The media-source endpoints return authenticated playback URLs only when `include
 
 ## Roadmap
 
-- Expose cached VOD and Series entries through native Jellyfin provider/library integration.
+- Deepen VOD and Series integration from channel-backed browsing toward first-class Jellyfin virtual library views if stable plugin APIs allow it.
 - Add optional M3U export as a separate opt-in feature, not as the default flow.
 - Add encrypted or Jellyfin-managed secret storage for provider passwords when a stable plugin API is available.
 - Expand integration tests against a live Jellyfin 10.11 server.

@@ -30,31 +30,52 @@ public class VodProvider
     public async Task<IReadOnlyList<VodItemInfo>> GetItemsAsync(CancellationToken cancellationToken)
     {
         var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
-        var categoryNames = cache.VodCategories.ToDictionary(category => category.CategoryId, category => category.Name, StringComparer.OrdinalIgnoreCase);
+        var categoryNames = cache.VodCategories.ToDictionary(
+            category => XtreamCacheIdentity.BuildItemKey(category.ProviderId, category.CategoryId),
+            category => category.Name,
+            StringComparer.OrdinalIgnoreCase);
 
         return cache.VodItems
-            .Select(item => ToInfo(item, categoryNames.GetValueOrDefault(item.CategoryId)))
+            .Select(item => ToInfo(
+                item,
+                categoryNames.GetValueOrDefault(XtreamCacheIdentity.BuildItemKey(item.ProviderId, item.CategoryId))))
             .ToList();
     }
 
     public async Task<VodItemInfo?> GetItemAsync(int streamId, CancellationToken cancellationToken)
+        => await GetItemAsync(streamId, null, cancellationToken).ConfigureAwait(false);
+
+    public async Task<VodItemInfo?> GetItemAsync(int streamId, string? providerId, CancellationToken cancellationToken)
     {
         var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
-        var item = cache.VodItems.FirstOrDefault(vod => vod.StreamId == streamId);
+        var normalizedProviderId = NormalizeProviderId(providerId);
+
+        var item = cache.VodItems.FirstOrDefault(vod =>
+            vod.StreamId == streamId
+            && (normalizedProviderId is null || string.Equals(vod.ProviderId, normalizedProviderId, StringComparison.OrdinalIgnoreCase)));
         if (item is null)
         {
             return null;
         }
 
         var categoryName = cache.VodCategories.FirstOrDefault(category =>
-            string.Equals(category.CategoryId, item.CategoryId, StringComparison.OrdinalIgnoreCase))?.Name;
+                string.Equals(category.ProviderId, item.ProviderId, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(category.CategoryId, item.CategoryId, StringComparison.OrdinalIgnoreCase))
+            ?.Name;
         return ToInfo(item, categoryName);
     }
 
     public async Task<IReadOnlyList<MediaSourceInfo>> GetMediaSourcesAsync(int streamId, CancellationToken cancellationToken)
+        => await GetMediaSourcesAsync(streamId, null, cancellationToken).ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<MediaSourceInfo>> GetMediaSourcesAsync(int streamId, string? providerId, CancellationToken cancellationToken)
     {
         var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
-        var item = cache.VodItems.FirstOrDefault(vod => vod.StreamId == streamId);
+        var item = cache.VodItems.FirstOrDefault(vod =>
+            vod.StreamId == streamId
+            && (string.IsNullOrWhiteSpace(providerId)
+                || string.Equals(vod.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)));
+
         if (item is null)
         {
             return [];
@@ -77,7 +98,7 @@ public class VodProvider
         var streamUrl = ResolveMovieStreamUrl(config, item);
         return new MediaSourceInfo
         {
-            Id = $"jellyxtreme-vod-{item.StreamId}",
+            Id = $"jellyxtreme-vod-{XtreamCacheIdentity.BuildItemKey(item.ProviderId, item.StreamId)}",
             Name = item.Name,
             Path = streamUrl,
             Protocol = MediaProtocol.Http,
@@ -102,6 +123,11 @@ public class VodProvider
             item.Rating,
             item.ContainerExtension,
             item.Added);
+
+    private static string? NormalizeProviderId(string? providerId)
+        => string.IsNullOrWhiteSpace(providerId)
+            ? null
+            : providerId;
 }
 
 public sealed class XtreamVodProvider : VodProvider

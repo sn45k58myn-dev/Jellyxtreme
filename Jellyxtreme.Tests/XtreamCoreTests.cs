@@ -4,6 +4,7 @@ using Jellyxtreme.Configuration;
 using Jellyxtreme.Controllers;
 using Jellyxtreme.Providers;
 using Jellyxtreme.Services;
+using MediaBrowser.Controller.Channels;
 using MediaBrowser.Model.LiveTv;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -29,6 +30,60 @@ public sealed class XtreamCoreTests
         Assert.Null(config.LastSuccessfulSyncUtc);
         Assert.Null(config.LastSyncDurationMs);
         Assert.Empty(config.LastSyncError);
+    }
+
+    [Fact]
+    public async Task MetadataEnrichmentSkipsWhenNoApiKeysProvided()
+    {
+        var service = new MetadataEnrichmentService(new TestHttpClientFactory(), NullLogger<MetadataEnrichmentService>.Instance);
+        var config = new PluginConfiguration
+        {
+            EnableMetadataEnrichment = true,
+            TmdbApiKey = string.Empty,
+            TvdbApiKey = string.Empty
+        };
+
+        var vod = new CachedVodItem
+        {
+            Name = "Pilot Movie",
+            StreamId = 10,
+            CategoryId = "101",
+            Poster = "local-poster.jpg"
+        };
+
+        await service.EnrichVodMetadataAsync(vod, config, CancellationToken.None);
+
+        Assert.Equal("local-poster.jpg", vod.Poster);
+        Assert.Null(vod.MetadataSource);
+        Assert.Null(vod.TmdbId);
+        Assert.Null(vod.TvdbId);
+    }
+
+    [Fact]
+    public async Task MetadataEnrichmentSkipsWhenConfigDisabled()
+    {
+        var service = new MetadataEnrichmentService(new TestHttpClientFactory(), NullLogger<MetadataEnrichmentService>.Instance);
+        var config = new PluginConfiguration
+        {
+            EnableMetadataEnrichment = false,
+            TmdbApiKey = "tmdb-key",
+            TvdbApiKey = "tvdb-key"
+        };
+
+        var series = new CachedSeriesItem
+        {
+            Name = "Pilot Series",
+            SeriesId = 20,
+            CategoryId = "202",
+            Poster = null
+        };
+
+        await service.EnrichSeriesMetadataAsync(series, config, CancellationToken.None);
+
+        Assert.Null(series.MetadataSource);
+        Assert.Null(series.TmdbId);
+        Assert.Null(series.TvdbId);
+        Assert.Null(series.Poster);
     }
 
     [Fact]
@@ -99,10 +154,13 @@ public sealed class XtreamCoreTests
     [Fact]
     public void CategoryFilterRequiresExplicitSelection()
     {
-        Assert.False(XtreamSelectionFilter.IsCategorySelected("10", []));
-        Assert.False(XtreamSelectionFilter.IsCategorySelected(null, ["10"]));
-        Assert.True(XtreamSelectionFilter.IsCategorySelected("10", ["9", "10"]));
-        Assert.True(XtreamSelectionFilter.IsCategorySelected("abc", ["ABC"]));
+        Assert.False(XtreamSelectionFilter.IsCategorySelected("provider1", "10", []));
+        Assert.True(XtreamSelectionFilter.IsCategorySelected(null, "10", ["10"]));
+        Assert.True(XtreamSelectionFilter.IsCategorySelected("provider1", "10", ["provider1:10"]));
+        Assert.True(XtreamSelectionFilter.IsCategorySelected("provider2", "10", ["provider1:10", "provider2:10"]));
+        Assert.False(XtreamSelectionFilter.IsCategorySelected("provider3", "10", ["provider1:10"]));
+        Assert.True(XtreamSelectionFilter.IsCategorySelected("provider1", "10", ["legacy:10"]));
+        Assert.True(XtreamSelectionFilter.IsCategorySelected(null, "10", ["legacy:10"]));
     }
 
     [Fact]
@@ -111,6 +169,29 @@ public sealed class XtreamCoreTests
         Assert.False(XtreamSelectionFilter.ShouldCacheSection(true, []));
         Assert.False(XtreamSelectionFilter.ShouldCacheSection(false, ["10"]));
         Assert.True(XtreamSelectionFilter.ShouldCacheSection(true, ["10"]));
+    }
+
+    [Fact]
+    public void SelectionIdsCanBeDeduplicatedAcrossProviderAndLegacyFormats()
+    {
+        var selected = new[]
+        {
+            "provider1:10",
+            "provider1:10",
+            "legacy:10",
+            "  provider2:22 ",
+            "22",
+            "provider3:22",
+            "provider3:22"
+        };
+
+        var normalized = selected.Select(XtreamSelectionFilter.NormalizeSelectionId).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray();
+
+        Assert.Contains("provider1:10", normalized);
+        Assert.Contains("provider2:22", normalized);
+        Assert.Contains("provider3:22", normalized);
+        Assert.Contains("legacy:10", normalized);
+        Assert.Equal(4, normalized.Length);
     }
 
     [Fact]
@@ -134,7 +215,7 @@ public sealed class XtreamCoreTests
     public void StreamResolverBuildsExpectedPlaybackPaths()
     {
         var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
-        var resolver = new StreamResolverService(apiClient);
+        var resolver = new StreamResolverService(apiClient, new ConfigCredentialStore());
         var config = new PluginConfiguration
         {
             ServerUrl = "https://provider.example",
@@ -156,7 +237,7 @@ public sealed class XtreamCoreTests
     public void StreamResolverThrowsControlledExceptionForInvalidStreamInput(int streamId, string extension)
     {
         var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
-        var resolver = new StreamResolverService(apiClient);
+        var resolver = new StreamResolverService(apiClient, new ConfigCredentialStore());
         var config = new PluginConfiguration
         {
             ServerUrl = "https://provider.example",
@@ -177,7 +258,7 @@ public sealed class XtreamCoreTests
     public void StreamResolverThrowsControlledExceptionForInvalidConfig(string serverUrl, string username, string password)
     {
         var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
-        var resolver = new StreamResolverService(apiClient);
+        var resolver = new StreamResolverService(apiClient, new ConfigCredentialStore());
         var config = new PluginConfiguration
         {
             ServerUrl = serverUrl,
@@ -200,6 +281,7 @@ public sealed class XtreamCoreTests
                 new CachedLiveChannel
                 {
                     Name = "News HD",
+                    ProviderId = "provider1",
                     StreamId = 42,
                     Logo = "https://logo.example/news.png",
                     EpgChannelId = "news.example",
@@ -215,7 +297,7 @@ public sealed class XtreamCoreTests
         var provider = new JellyfinLiveTvProvider(
             cache,
             xmlTvCache,
-            new StreamResolverService(apiClient),
+            new StreamResolverService(apiClient, new ConfigCredentialStore()),
             new TestHttpClientFactory(),
             NullLogger<JellyfinLiveTvProvider>.Instance,
             () => new PluginConfiguration
@@ -226,18 +308,19 @@ public sealed class XtreamCoreTests
             });
 
         var channels = await provider.GetChannels(false, CancellationToken.None);
-        var mediaSources = await provider.GetChannelStreamMediaSources("42", CancellationToken.None);
+        var mediaSources = await provider.GetChannelStreamMediaSources("provider1:42", CancellationToken.None);
 
         Assert.Single(channels);
         Assert.Equal("News HD", channels[0].Name);
         Assert.Equal("https://logo.example/news.png", channels[0].ImageUrl);
         Assert.Equal("news.example", channels[0].CallSign);
         Assert.Equal("News", channels[0].ChannelGroup);
-        Assert.Equal("42", channels[0].Id);
+        Assert.Equal("provider1:42", channels[0].Id);
+        Assert.Equal("News HD", channels[0].Number);
         Assert.Equal("jellyxtreme", channels[0].TunerHostId);
         Assert.Contains("category:7", channels[0].Tags);
         Assert.Single(mediaSources);
-        Assert.Equal("http://127.0.0.1:8096/Jellyxtreme/Live/42.ts", mediaSources[0].Path);
+        Assert.Equal("http://127.0.0.1:8096/Jellyxtreme/Live/provider1/42.ts", mediaSources[0].Path);
         Assert.False(string.IsNullOrWhiteSpace(mediaSources[0].OpenToken));
         Assert.True(mediaSources[0].RequiresOpening);
         Assert.Null(mediaSources[0].LiveStreamId);
@@ -250,6 +333,8 @@ public sealed class XtreamCoreTests
         Assert.Null(mediaSources[0].DefaultAudioStreamIndex);
         Assert.True(mediaSources[0].ReadAtNativeFramerate);
         Assert.True(mediaSources[0].IgnoreDts);
+        Assert.True(mediaSources[0].GenPtsInput);
+        Assert.Equal(MediaBrowser.Model.MediaInfo.TransportStreamTimestamp.Valid, mediaSources[0].Timestamp);
     }
 
     [Fact]
@@ -265,6 +350,7 @@ public sealed class XtreamCoreTests
                 new CachedVodItem
                 {
                     Name = "Cached Movie",
+                    ProviderId = "provider1",
                     StreamId = 55,
                     CategoryId = "11",
                     Poster = "https://poster.example/movie.jpg",
@@ -278,7 +364,7 @@ public sealed class XtreamCoreTests
         var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
         var provider = new VodProvider(
             cache,
-            new StreamResolverService(apiClient),
+            new StreamResolverService(apiClient, new ConfigCredentialStore()),
             () => new PluginConfiguration
             {
                 ServerUrl = "https://provider.example",
@@ -296,6 +382,97 @@ public sealed class XtreamCoreTests
         Assert.Single(mediaSources);
         Assert.Equal("https://provider.example/movie/user/secret/55.mkv", mediaSources[0].Path);
         Assert.True(mediaSources[0].IsRemote);
+    }
+
+    [Fact]
+    public async Task XtreamMovieLibraryProviderExposesCachedMoviesThroughNativeChannelBrowsing()
+    {
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N"));
+        var cache = new XtreamCacheService(NullLogger<XtreamCacheService>.Instance, cacheDirectory);
+        await cache.SaveAsync(new XtreamCacheDocument
+        {
+            VodCategories = [new CachedCategory { CategoryId = "11", Name = "Movies", Kind = "vod" }],
+            VodItems =
+            [
+                new CachedVodItem
+                {
+                    Name = "Cached Movie",
+                    ProviderId = "provider1",
+                    StreamId = 55,
+                    CategoryId = "11",
+                    Poster = "https://poster.example/movie.jpg",
+                    Rating = 8.1,
+                    ContainerExtension = "mkv"
+                }
+            ]
+        }, CancellationToken.None);
+
+        var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
+        var vodProvider = new VodProvider(
+            cache,
+            new StreamResolverService(apiClient, new ConfigCredentialStore()),
+            () => new PluginConfiguration
+            {
+                ServerUrl = "https://provider.example",
+                Username = "user",
+                Password = "secret"
+            });
+        var libraryProvider = new XtreamMovieLibraryProvider(cache, vodProvider);
+
+        var categories = await libraryProvider.GetChannelItems(new InternalChannelItemQuery(), CancellationToken.None);
+        var movies = await libraryProvider.GetChannelItems(new InternalChannelItemQuery { FolderId = categories.Items[0].Id }, CancellationToken.None);
+        var mediaSources = (await libraryProvider.GetChannelItemMediaInfo(movies.Items[0].Id, CancellationToken.None)).ToList();
+
+        Assert.Single(categories.Items);
+        Assert.Equal(ChannelItemType.Folder, categories.Items[0].Type);
+        Assert.Equal("Movies", categories.Items[0].Name);
+        Assert.Single(movies.Items);
+        Assert.Equal(ChannelItemType.Media, movies.Items[0].Type);
+        Assert.Equal("Cached Movie", movies.Items[0].Name);
+        Assert.Equal("https://poster.example/movie.jpg", movies.Items[0].ImageUrl);
+        Assert.Single(mediaSources);
+        Assert.Equal("https://provider.example/movie/user/secret/55.mkv", mediaSources[0].Path);
+    }
+
+    [Fact]
+    public async Task XtreamSeriesLibraryProviderKeepsProvidersDistinctWhenCategoriesShareIds()
+    {
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N"));
+        var cache = new XtreamCacheService(NullLogger<XtreamCacheService>.Instance, cacheDirectory);
+        await cache.SaveAsync(new XtreamCacheDocument
+        {
+            SeriesCategories =
+            [
+                new CachedCategory { ProviderId = "provider1", CategoryId = "42", Name = "Shared", Kind = "series" },
+                new CachedCategory { ProviderId = "provider2", CategoryId = "42", Name = "Shared", Kind = "series" }
+            ],
+            SeriesItems =
+            [
+                new CachedSeriesItem
+                {
+                    Name = "Provider 1 Series",
+                    SeriesId = 10,
+                    ProviderId = "provider1",
+                    CategoryId = "42"
+                },
+                new CachedSeriesItem
+                {
+                    Name = "Provider 2 Series",
+                    SeriesId = 10,
+                    ProviderId = "provider2",
+                    CategoryId = "42"
+                }
+            ]
+        }, CancellationToken.None);
+
+        var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
+        var libraryProvider = new XtreamSeriesLibraryProvider(cache, new SeriesProvider(cache, new StreamResolverService(apiClient, new ConfigCredentialStore())));
+        var categories = await libraryProvider.GetChannelItems(new InternalChannelItemQuery(), CancellationToken.None);
+
+        var ids = categories.Items.Select(item => item.Id).ToList();
+        Assert.Equal(2, ids.Count);
+        Assert.Contains("provider1:42", ids);
+        Assert.Contains("provider2:42", ids);
     }
 
     [Fact]
@@ -330,7 +507,7 @@ public sealed class XtreamCoreTests
         await cache.SaveAsync(new XtreamCacheDocument { CacheVersion = 0 }, CancellationToken.None);
         var loaded = await cache.LoadAsync(CancellationToken.None);
 
-        Assert.Equal(1, loaded.CacheVersion);
+        Assert.Equal(2, loaded.CacheVersion);
         Assert.False(File.Exists(Path.Combine(cacheDirectory, "xtream-cache.json.tmp")));
     }
 
@@ -357,6 +534,33 @@ public sealed class XtreamCoreTests
     }
 
     [Fact]
+    public async Task CacheFailureMetadataIsRecordedAndRollbackPreservesPreviousCache()
+    {
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N"));
+        var cache = new XtreamCacheService(NullLogger<XtreamCacheService>.Instance, cacheDirectory);
+
+        await cache.SaveAsync(new XtreamCacheDocument
+        {
+            LiveChannels = [new CachedLiveChannel { Name = "Known Good", StreamId = 12 }],
+        }, CancellationToken.None);
+
+        await cache.SaveAsync(new XtreamCacheDocument
+        {
+            LiveChannels = [new CachedLiveChannel { Name = "Current", StreamId = 99 }],
+        }, CancellationToken.None);
+
+        await cache.MarkRefreshFailureAsync("provider timeout", CancellationToken.None);
+        var failed = await cache.LoadAsync(CancellationToken.None);
+        Assert.Equal("provider timeout", failed.LastFailureReason);
+        Assert.NotNull(failed.LastFailureUtc);
+
+        await cache.RollbackToBackupAsync(CancellationToken.None);
+        var restored = await cache.LoadAsync(CancellationToken.None);
+        Assert.Single(restored.LiveChannels);
+        Assert.Equal("Known Good", restored.LiveChannels[0].Name);
+    }
+
+    [Fact]
     public async Task SeriesProviderUsesCachedMetadataAndResolvesEpisodeStreamsDynamically()
     {
         var cacheDirectory = Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N"));
@@ -369,6 +573,7 @@ public sealed class XtreamCoreTests
                 new CachedSeriesItem
                 {
                     Name = "Cached Series",
+                    ProviderId = "provider1",
                     SeriesId = 77,
                     CategoryId = "22",
                     Poster = "https://poster.example/series.jpg",
@@ -384,6 +589,7 @@ public sealed class XtreamCoreTests
                                 new CachedEpisodeItem
                                 {
                                     Title = "Pilot",
+                                    ProviderId = "provider1",
                                     StreamId = 88,
                                     EpisodeNumber = "1",
                                     ContainerExtension = "mp4",
@@ -399,7 +605,7 @@ public sealed class XtreamCoreTests
         var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
         var provider = new SeriesProvider(
             cache,
-            new StreamResolverService(apiClient),
+            new StreamResolverService(apiClient, new ConfigCredentialStore()),
             () => new PluginConfiguration
             {
                 ServerUrl = "https://provider.example",
@@ -420,6 +626,78 @@ public sealed class XtreamCoreTests
         Assert.Single(mediaSources);
         Assert.Equal("https://provider.example/series/user/secret/88.mp4", mediaSources[0].Path);
         Assert.True(mediaSources[0].IsRemote);
+    }
+
+    [Fact]
+    public async Task XtreamSeriesLibraryProviderExposesSeriesSeasonsAndEpisodesThroughNativeChannelBrowsing()
+    {
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "jellyxtreme-tests", Guid.NewGuid().ToString("N"));
+        var cache = new XtreamCacheService(NullLogger<XtreamCacheService>.Instance, cacheDirectory);
+        await cache.SaveAsync(new XtreamCacheDocument
+        {
+            SeriesCategories = [new CachedCategory { CategoryId = "22", Name = "Drama", Kind = "series" }],
+            SeriesItems =
+            [
+                new CachedSeriesItem
+                {
+                    Name = "Cached Series",
+                    ProviderId = "provider1",
+                    SeriesId = 77,
+                    CategoryId = "22",
+                    Poster = "https://poster.example/series.jpg",
+                    Plot = "Cached plot",
+                    Seasons =
+                    [
+                        new CachedSeason
+                        {
+                            SeasonNumber = 1,
+                            Episodes =
+                            [
+                                new CachedEpisodeItem
+                                {
+                                    Title = "Pilot",
+                                    ProviderId = "provider1",
+                                    StreamId = 88,
+                                    EpisodeNumber = "1",
+                                    ContainerExtension = "mp4"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }, CancellationToken.None);
+
+        var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
+        var seriesProvider = new SeriesProvider(
+            cache,
+            new StreamResolverService(apiClient, new ConfigCredentialStore()),
+            () => new PluginConfiguration
+            {
+                ServerUrl = "https://provider.example",
+                Username = "user",
+                Password = "secret"
+            });
+        var libraryProvider = new XtreamSeriesLibraryProvider(cache, seriesProvider);
+
+        var categories = await libraryProvider.GetChannelItems(new InternalChannelItemQuery(), CancellationToken.None);
+        var series = await libraryProvider.GetChannelItems(new InternalChannelItemQuery { FolderId = categories.Items[0].Id }, CancellationToken.None);
+        var seasons = await libraryProvider.GetChannelItems(new InternalChannelItemQuery { FolderId = series.Items[0].Id }, CancellationToken.None);
+        var episodes = await libraryProvider.GetChannelItems(new InternalChannelItemQuery { FolderId = seasons.Items[0].Id }, CancellationToken.None);
+        var mediaSources = (await libraryProvider.GetChannelItemMediaInfo(episodes.Items[0].Id, CancellationToken.None)).ToList();
+
+        Assert.Single(categories.Items);
+        Assert.Equal("Drama", categories.Items[0].Name);
+        Assert.Single(series.Items);
+        Assert.Equal(ChannelItemType.Folder, series.Items[0].Type);
+        Assert.Equal("Cached Series", series.Items[0].Name);
+        Assert.Single(seasons.Items);
+        Assert.Equal("Season 1", seasons.Items[0].Name);
+        Assert.Single(episodes.Items);
+        Assert.Equal(ChannelItemType.Media, episodes.Items[0].Type);
+        Assert.Equal("Pilot", episodes.Items[0].Name);
+        Assert.Single(mediaSources);
+        Assert.Equal("https://provider.example/series/user/secret/88.mp4", mediaSources[0].Path);
     }
 
     [Fact]
@@ -471,7 +749,7 @@ public sealed class XtreamCoreTests
         var provider = new JellyfinLiveTvProvider(
             cache,
             xmlTvCache,
-            new StreamResolverService(apiClient),
+            new StreamResolverService(apiClient, new ConfigCredentialStore()),
             new TestHttpClientFactory(),
             NullLogger<JellyfinLiveTvProvider>.Instance,
             () => new PluginConfiguration());
@@ -497,18 +775,23 @@ public sealed class XtreamCoreTests
     {
         var apiClient = new XtreamApiClient(new TestHttpClientFactory(), NullLogger<XtreamApiClient>.Instance);
         var cache = new XtreamCacheService(NullLogger<XtreamCacheService>.Instance, cacheDirectory);
-        var resolver = new StreamResolverService(apiClient);
+        var resolver = new StreamResolverService(apiClient, new ConfigCredentialStore());
+        var credentialStore = new ConfigCredentialStore();
+        var metadata = new MetadataEnrichmentService(new TestHttpClientFactory(), NullLogger<MetadataEnrichmentService>.Instance);
         return new JellyxtremeApiController(
             apiClient,
             new XtreamCacheRefreshService(
                 apiClient,
                 cache,
                 new XmlTvCacheService(apiClient, cache, NullLogger<XmlTvCacheService>.Instance),
+                metadata,
+                credentialStore,
                 NullLogger<XtreamCacheRefreshService>.Instance),
             cache,
             new VodProvider(cache, resolver, () => new PluginConfiguration()),
             new SeriesProvider(cache, resolver, () => new PluginConfiguration()),
             resolver,
+            credentialStore,
             new TestHttpClientFactory(),
             NullLogger<JellyxtremeApiController>.Instance);
     }

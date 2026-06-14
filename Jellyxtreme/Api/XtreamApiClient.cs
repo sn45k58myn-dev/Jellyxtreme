@@ -95,6 +95,69 @@ public sealed class XtreamApiClient
         return await ExecuteWithTimeout(settings, token => _httpClient.GetStringAsync(uri, token), cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<XtreamXmlTvResponse> GetXmlTvResponseAsync(
+        XtreamConnectionSettings settings,
+        string? knownEtag,
+        DateTimeOffset? knownLastModified,
+        CancellationToken cancellationToken)
+    {
+        return await ExecuteWithTimeout(
+            settings,
+            async token =>
+            {
+                using var request = BuildXmlTvRequest(settings.ServerUrl, settings.Username, settings.Password, knownEtag, knownLastModified);
+                using var response = await _httpClient.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    token).ConfigureAwait(false);
+
+                if (response.StatusCode == HttpStatusCode.NotModified)
+                {
+                    _logger.LogInformation("JellyXtreme XMLTV is unchanged (HTTP 304).");
+                    return new XtreamXmlTvResponse(
+                        true,
+                        null,
+                        GetSingleHeaderValue(response.Headers.ETag),
+                        GetHeaderDate(response.Content.Headers.LastModified ?? response.Headers.Date),
+                        DateTimeOffset.UtcNow);
+                }
+
+                response.EnsureSuccessStatusCode();
+                var content = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+                return new XtreamXmlTvResponse(
+                    false,
+                    content,
+                    GetSingleHeaderValue(response.Headers.ETag),
+                    GetHeaderDate(response.Content.Headers.LastModified ?? response.Headers.Date),
+                    DateTimeOffset.UtcNow);
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static HttpRequestMessage BuildXmlTvRequest(
+        string serverUrl,
+        string username,
+        string password,
+        string? knownEtag,
+        DateTimeOffset? knownLastModified)
+    {
+        var settings = new XtreamConnectionSettings(serverUrl, username, password, TimeSpan.FromSeconds(30));
+        _ = ValidateSettings(settings);
+        var request = new HttpRequestMessage(HttpMethod.Get, BuildXmlTvUri(settings));
+
+        if (!string.IsNullOrWhiteSpace(knownEtag))
+        {
+            request.Headers.IfNoneMatch.TryParseAdd(knownEtag);
+        }
+
+        if (knownLastModified.HasValue)
+        {
+            request.Headers.IfModifiedSince = knownLastModified.Value;
+        }
+
+        return request;
+    }
+
     public string GetLiveStreamUrl(XtreamConnectionSettings settings, int streamId, string extension = "ts")
         => BuildStreamUrl(settings, "live", streamId, extension, nameof(GetLiveStreamUrl));
 
@@ -245,6 +308,16 @@ public sealed class XtreamApiClient
         return await action(finalTimeoutSource.Token).ConfigureAwait(false);
     }
 
+    private static string? GetSingleHeaderValue(System.Net.Http.Headers.EntityTagHeaderValue? etag)
+    {
+        return etag?.Tag;
+    }
+
+    private static DateTimeOffset? GetHeaderDate(DateTimeOffset? headerValue)
+    {
+        return headerValue;
+    }
+
     public static string Redact(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -309,7 +382,18 @@ public sealed class XtreamApiClient
 public sealed record XtreamConnectionSettings(string ServerUrl, string Username, string Password, TimeSpan Timeout)
 {
     public static XtreamConnectionSettings FromConfig(Configuration.PluginConfiguration config)
-        => new(config.ServerUrl, config.Username, config.Password, TimeSpan.FromMinutes(Math.Max(1, config.CacheMinutes)));
+        => FromConfig(config, null);
+
+    public static XtreamConnectionSettings FromConfig(Configuration.PluginConfiguration config, string? providerId)
+    {
+        var provider = config.GetProviderById(providerId);
+        if (provider is null)
+        {
+            throw new XtreamValidationException("Configured provider credentials are required.", nameof(config));
+        }
+
+        return new(provider.ServerUrl, provider.Username, provider.Password, TimeSpan.FromMinutes(Math.Max(1, config.CacheMinutes)));
+    }
 
     public static XtreamConnectionSettings FromRequest(string serverUrl, string username, string password)
         => new(serverUrl, username, password, TimeSpan.FromSeconds(30));
@@ -437,10 +521,16 @@ public sealed class XtreamSeries
 
     [JsonPropertyName("rating")]
     public double? Rating { get; set; }
+
+    [JsonPropertyName("last_modified")]
+    public string? LastModified { get; set; }
 }
 
 public sealed class XtreamSeriesInfoResponse
 {
+    [JsonPropertyName("last_modified")]
+    public string? LastModified { get; set; }
+
     [JsonPropertyName("info")]
     public XtreamSeriesInfo? Info { get; set; }
 

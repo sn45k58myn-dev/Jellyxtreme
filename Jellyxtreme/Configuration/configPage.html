@@ -9,17 +9,58 @@
         <div data-role="content">
             <div class="content-primary">
                 <form id="JellyxtremeConfigForm">
-                    <div class="inputContainer">
-                        <label class="inputLabel" for="ServerUrl">Xtream Server URL</label>
-                        <input type="url" id="ServerUrl" is="emby-input" required />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel" for="Username">Username</label>
-                        <input type="text" id="Username" is="emby-input" autocomplete="username" required />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel" for="Password">Password</label>
-                        <input type="password" id="Password" is="emby-input" autocomplete="current-password" required />
+                    <h2>Providers</h2>
+
+                    <fieldset class="providerSection">
+                        <legend>Provider 1</legend>
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="Provider1ServerUrl">Server URL</label>
+                            <input type="url" id="Provider1ServerUrl" is="emby-input" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="Provider1Username">Username</label>
+                            <input type="text" id="Provider1Username" is="emby-input" autocomplete="username" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="Provider1Password">Password</label>
+                            <input type="password" id="Provider1Password" is="emby-input" autocomplete="current-password" />
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="providerSection">
+                        <legend>Provider 2</legend>
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="Provider2ServerUrl">Server URL</label>
+                            <input type="url" id="Provider2ServerUrl" is="emby-input" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="Provider2Username">Username</label>
+                            <input type="text" id="Provider2Username" is="emby-input" autocomplete="username" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="Provider2Password">Password</label>
+                            <input type="password" id="Provider2Password" is="emby-input" autocomplete="current-password" />
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="providerSection">
+                        <legend>Provider 3</legend>
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="Provider3ServerUrl">Server URL</label>
+                            <input type="url" id="Provider3ServerUrl" is="emby-input" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="Provider3Username">Username</label>
+                            <input type="text" id="Provider3Username" is="emby-input" autocomplete="username" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="Provider3Password">Password</label>
+                            <input type="password" id="Provider3Password" is="emby-input" autocomplete="current-password" />
+                        </div>
+                    </fieldset>
+
+                    <div class="inputDescription">
+                        At least one provider must have complete credentials before testing or refreshing categories.
                     </div>
 
                     <div class="inputContainer">
@@ -30,6 +71,24 @@
                         <label class="inputLabel" for="CacheMinutes">Request timeout minutes</label>
                         <input type="number" id="CacheMinutes" is="emby-input" min="1" step="1" />
                     </div>
+                    <fieldset>
+                        <legend>Optional metadata enrichment</legend>
+                        <label class="checkboxContainer">
+                            <input type="checkbox" is="emby-checkbox" id="EnableMetadataEnrichment" />
+                            <span>Enable metadata enrichment</span>
+                        </label>
+                        <div class="inputDescription">
+                            Optionally enrich cached movies and series with TMDB/TVDB metadata.
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="TmdbApiKey">TMDB API key</label>
+                            <input type="password" id="TmdbApiKey" is="emby-input" autocomplete="off" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="TvdbApiKey">TVDB API key</label>
+                            <input type="password" id="TvdbApiKey" is="emby-input" autocomplete="off" />
+                        </div>
+                    </fieldset>
 
                     <div class="inputContainer">
                         <button is="emby-button" type="button" id="TestConnectionButton" class="raised">
@@ -46,6 +105,9 @@
                         <div id="VodItemsCached">VOD items cached: 0</div>
                         <div id="SeriesCached">Series cached: 0</div>
                         <div id="EpisodesCached">Episodes cached: 0</div>
+                        <div id="LastXmlTvRefresh">Last XMLTV refresh: never</div>
+                        <div id="GuideAge">Guide age: none</div>
+                        <div id="GuideChannelCount">Guide channels: 0</div>
                         <div id="CacheVersion">Cache version: unknown</div>
                         <div id="SyncDuration">Sync duration: none</div>
                         <div id="LastSyncError">Last error: none</div>
@@ -98,6 +160,11 @@
             (function () {
                 var pluginId = "A4B6C922-1D5F-4E90-B8A6-FA3A6E4C4D78";
                 var currentConfig = {};
+                var providers = [
+                    { id: 'provider1', label: 'Provider 1', serverInput: '#Provider1ServerUrl', usernameInput: '#Provider1Username', passwordInput: '#Provider1Password' },
+                    { id: 'provider2', label: 'Provider 2', serverInput: '#Provider2ServerUrl', usernameInput: '#Provider2Username', passwordInput: '#Provider2Password' },
+                    { id: 'provider3', label: 'Provider 3', serverInput: '#Provider3ServerUrl', usernameInput: '#Provider3Username', passwordInput: '#Provider3Password' }
+                ];
 
                 function page() {
                     return document.getElementById('JellyxtremeConfigPage');
@@ -111,12 +178,21 @@
                     return page().querySelector(selector).checked;
                 }
 
-                function connectionPayload() {
+                function hasProviderCredentials(provider) {
+                    return value(provider.serverInput).trim() && value(provider.usernameInput).trim() && value(provider.passwordInput).trim();
+                }
+
+                function toConnectionPayload(provider) {
                     return {
-                        ServerUrl: value('#ServerUrl'),
-                        Username: value('#Username'),
-                        Password: value('#Password')
+                        ProviderId: provider.id,
+                        ServerUrl: value(provider.serverInput).trim(),
+                        Username: value(provider.usernameInput).trim(),
+                        Password: value(provider.passwordInput).trim()
                     };
+                }
+
+                function configuredProviders() {
+                    return providers.filter(hasProviderCredentials);
                 }
 
                 function isLikelyServerUrl(serverUrl) {
@@ -214,7 +290,7 @@
                 }
 
                 function hasConnectionDetails() {
-                    return value('#ServerUrl').trim() && value('#Username').trim() && value('#Password').trim();
+                    return configuredProviders().length > 0;
                 }
 
                 function updateConnectionButtons() {
@@ -224,10 +300,30 @@
                 }
 
                 function selectedCategoryIds(containerId) {
-                    return Array.prototype.slice.call(page().querySelectorAll('#' + containerId + ' input[type="checkbox"]:checked'))
-                        .map(function (input) {
-                            return input.value;
+                    var selected = new Set();
+                    Array.prototype.slice.call(page().querySelectorAll('#' + containerId + ' input[type="checkbox"]:checked'))
+                        .forEach(function (input) {
+                            var rawValue = (input.value || '').trim();
+                            if (!rawValue) {
+                                return;
+                            }
+
+                            var providerId = null;
+                            var categoryId = rawValue;
+                            var separatorIndex = rawValue.lastIndexOf(':');
+                            if (separatorIndex > 0 && separatorIndex < rawValue.length - 1) {
+                                providerId = rawValue.substring(0, separatorIndex).trim();
+                                categoryId = rawValue.substring(separatorIndex + 1).trim();
+                            }
+
+                            if (!categoryId) {
+                                return;
+                            }
+
+                            selected.add((providerId || 'legacy') + ':' + categoryId);
                         });
+
+                    return Array.from(selected);
                 }
 
                 function updateSelectedCounts() {
@@ -275,6 +371,19 @@
                         page().querySelector('#SeriesCached').textContent = 'Series cached: ' + series;
                         page().querySelector('#EpisodesCached').textContent = 'Episodes cached: ' + episodes;
                         page().querySelector('#CacheVersion').textContent = 'Cache version: ' + cacheVersion;
+                        var guideChannelCount = field(summary, 'GuideChannelCount', 'guideChannelCount') || 0;
+                        var missingGuideChannelCount = field(summary, 'MissingGuideChannelCount', 'missingGuideChannelCount') || 0;
+                        page().querySelector('#GuideChannelCount').textContent = 'Guide channels: ' + guideChannelCount + ' (missing: ' + missingGuideChannelCount + ')';
+                        var guideAge = field(summary, 'GuideAgeMs', 'guideAgeMs');
+                        if (guideAge === null || guideAge === undefined || guideAge === '') {
+                            page().querySelector('#GuideAge').textContent = 'Guide age: unavailable';
+                        } else {
+                            page().querySelector('#GuideAge').textContent = 'Guide age: ' + formatDuration(guideAge);
+                        }
+
+                        var xmlTvRefresh = field(summary, 'LastXmlTvRefreshUtc', 'lastXmlTvRefreshUtc');
+                        page().querySelector('#LastXmlTvRefresh').textContent = xmlTvRefresh ? ('Last XMLTV refresh: ' + new Date(xmlTvRefresh).toLocaleString()) : 'Last XMLTV refresh: never';
+
                         page().querySelector('#SyncDuration').textContent = 'Sync duration: ' + formatDuration(field(summary, 'LastSyncDurationMs', 'lastSyncDurationMs'));
 
                         var lastError = field(summary, 'LastSyncError', 'lastSyncError') || '';
@@ -287,6 +396,9 @@
                         page().querySelector('#EpisodesCached').textContent = 'Episodes cached: unavailable';
                         page().querySelector('#CacheVersion').textContent = 'Cache version: unavailable';
                         page().querySelector('#SyncDuration').textContent = 'Sync duration: unavailable';
+                        page().querySelector('#LastXmlTvRefresh').textContent = 'Last XMLTV refresh: unavailable';
+                        page().querySelector('#GuideAge').textContent = 'Guide age: unavailable';
+                        page().querySelector('#GuideChannelCount').textContent = 'Guide channels: unavailable';
                         page().querySelector('#LastSyncError').textContent = 'Last error: unavailable';
                     });
                 }
@@ -301,13 +413,121 @@
                     });
                 }
 
+                function mergeCategorySnapshots(snapshots) {
+                    var live = [];
+                    var vod = [];
+                    var series = [];
+                    var seenLive = new Set();
+                    var seenVod = new Set();
+                    var seenSeries = new Set();
+
+                    (snapshots || []).forEach(function (snapshot) {
+                        (snapshot.Live || snapshot.live || []).forEach(function (category) {
+                            var providerId = (category.ProviderId || 'legacy').trim().toLowerCase();
+                            var key = providerId + ':' + (category.CategoryId || category.categoryId || '');
+                            if (!key) {
+                                return;
+                            }
+
+                            if (!seenLive.has(key)) {
+                                seenLive.add(key);
+                                live.push(category);
+                            }
+                        });
+
+                        (snapshot.Vod || snapshot.vod || []).forEach(function (category) {
+                            var providerId = (category.ProviderId || 'legacy').trim().toLowerCase();
+                            var key = providerId + ':' + (category.CategoryId || category.categoryId || '');
+                            if (!key) {
+                                return;
+                            }
+
+                            if (!seenVod.has(key)) {
+                                seenVod.add(key);
+                                vod.push(category);
+                            }
+                        });
+
+                        (snapshot.Series || snapshot.series || []).forEach(function (category) {
+                            var providerId = (category.ProviderId || 'legacy').trim().toLowerCase();
+                            var key = providerId + ':' + (category.CategoryId || category.categoryId || '');
+                            if (!key) {
+                                return;
+                            }
+
+                            if (!seenSeries.has(key)) {
+                                seenSeries.add(key);
+                                series.push(category);
+                            }
+                        });
+                    });
+
+                    return {
+                        live: live,
+                        vod: vod,
+                        series: series
+                    };
+                }
+
+                function selectionIdForCategory(providerId, categoryId) {
+                    var normalizedProviderId = (providerId || 'legacy').trim().toLowerCase() || 'legacy';
+                    return normalizedProviderId + ':' + categoryId;
+                }
+
+                function normalizeSavedCategoryIds(selectedIds) {
+                    var normalized = new Set();
+                    (selectedIds || []).forEach(function (value) {
+                        if (!value) {
+                            return;
+                        }
+
+                        var providerId = null;
+                        var categoryId = value.toString();
+                        var separatorIndex = categoryId.lastIndexOf(':');
+                        if (separatorIndex > 0 && separatorIndex < categoryId.length - 1) {
+                            providerId = categoryId.substring(0, separatorIndex).trim().toLowerCase();
+                            categoryId = categoryId.substring(separatorIndex + 1).trim();
+                        }
+
+                        if (!categoryId) {
+                            return;
+                        }
+
+                        normalized.add((providerId || 'legacy') + ':' + categoryId);
+                    });
+
+                    return Array.from(normalized);
+                }
+
+                function providerNameFor(providerId) {
+                    providerId = (providerId || '').trim().toLowerCase();
+                    if (!providerId) {
+                        return 'Provider';
+                    }
+
+                    if (providerId === 'provider1') {
+                        return 'Provider 1';
+                    }
+
+                    if (providerId === 'provider2') {
+                        return 'Provider 2';
+                    }
+
+                    if (providerId === 'provider3') {
+                        return 'Provider 3';
+                    }
+
+                    return providerId;
+                }
+
                 function renderCategoryList(containerId, categories, selectedIds) {
                     var container = page().querySelector('#' + containerId);
-                    var selected = new Set(selectedIds || []);
+                    var selected = new Set(normalizeSavedCategoryIds(selectedIds));
                     container.innerHTML = '';
 
                     (categories || []).forEach(function (category) {
                         var id = category.CategoryId || category.categoryId || category.category_id || '';
+                        var providerId = (category.ProviderId || category.providerId || 'legacy').trim().toLowerCase();
                         var name = category.CategoryName || category.categoryName || category.category_name || category.Name || category.name || id;
                         if (!id) {
                             return;
@@ -319,12 +539,16 @@
                         var input = document.createElement('input');
                         input.type = 'checkbox';
                         input.setAttribute('is', 'emby-checkbox');
-                        input.value = id;
-                        input.checked = selected.has(id);
+                        input.value = selectionIdForCategory(providerId, id);
+                        input.checked = selected.has(input.value);
+                        if (!input.checked && providerId === 'provider1')
+                        {
+                            input.checked = selected.has(selectionIdForCategory('legacy', id));
+                        }
                         input.addEventListener('change', updateSelectedCounts);
 
                         var span = document.createElement('span');
-                        span.textContent = name;
+                        span.textContent = providerNameFor(providerId) + ' - ' + name;
 
                         label.appendChild(input);
                         label.appendChild(span);
@@ -338,14 +562,23 @@
 
                     return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                         currentConfig = config || {};
-                        page().querySelector('#ServerUrl').value = currentConfig.ServerUrl || '';
-                        page().querySelector('#Username').value = currentConfig.Username || '';
-                        page().querySelector('#Password').value = currentConfig.Password || '';
+                        page().querySelector('#Provider1ServerUrl').value = currentConfig.Provider1ServerUrl || currentConfig.ServerUrl || '';
+                        page().querySelector('#Provider1Username').value = currentConfig.Provider1Username || currentConfig.Username || '';
+                        page().querySelector('#Provider1Password').value = currentConfig.Provider1Password || currentConfig.Password || '';
+                        page().querySelector('#Provider2ServerUrl').value = currentConfig.Provider2ServerUrl || '';
+                        page().querySelector('#Provider2Username').value = currentConfig.Provider2Username || '';
+                        page().querySelector('#Provider2Password').value = currentConfig.Provider2Password || '';
+                        page().querySelector('#Provider3ServerUrl').value = currentConfig.Provider3ServerUrl || '';
+                        page().querySelector('#Provider3Username').value = currentConfig.Provider3Username || '';
+                        page().querySelector('#Provider3Password').value = currentConfig.Provider3Password || '';
                         page().querySelector('#EnableLiveTv').checked = currentConfig.EnableLiveTv || false;
                         page().querySelector('#EnableVod').checked = currentConfig.EnableVod || false;
                         page().querySelector('#EnableSeries').checked = currentConfig.EnableSeries || false;
                         page().querySelector('#SyncIntervalHours').value = currentConfig.SyncIntervalHours || 12;
                         page().querySelector('#CacheMinutes').value = currentConfig.CacheMinutes || 60;
+                        page().querySelector('#EnableMetadataEnrichment').checked = currentConfig.EnableMetadataEnrichment || false;
+                        page().querySelector('#TmdbApiKey').value = currentConfig.TmdbApiKey || '';
+                        page().querySelector('#TvdbApiKey').value = currentConfig.TvdbApiKey || '';
                         Dashboard.hideLoadingMsg();
                         updateConnectionButtons();
                         updateSelectedCounts();
@@ -355,18 +588,33 @@
                 }
 
                 function refreshCategories() {
-                    var validationMessage = validateConnectionPayload(connectionPayload());
-                    if (validationMessage) {
-                        page().querySelector('#ConnectionStatus').textContent = validationMessage;
+                    var providerList = configuredProviders();
+                    if (providerList.length === 0) {
+                        page().querySelector('#ConnectionStatus').textContent = 'No provider credentials configured.';
                         return Promise.resolve();
                     }
 
                     Dashboard.showLoadingMsg();
-                    return postJson('Jellyxtreme/Categories', connectionPayload()).then(function (snapshot) {
-                        renderCategoryList('LiveCategories', snapshot.Live || snapshot.live, currentConfig.SelectedLiveCategoryIds);
-                        renderCategoryList('VodCategories', snapshot.Vod || snapshot.vod, currentConfig.SelectedVodCategoryIds);
-                        renderCategoryList('SeriesCategories', snapshot.Series || snapshot.series, currentConfig.SelectedSeriesCategoryIds);
-                        page().querySelector('#ConnectionStatus').textContent = 'Categories loaded.';
+                    var requests = providerList.map(function (provider) {
+                        var payload = toConnectionPayload(provider);
+                        var validationMessage = validateConnectionPayload(payload);
+                        if (validationMessage) {
+                            return Promise.reject(new Error(validationMessage + ' (' + provider.label + ')'));
+                        }
+
+                        return postJson('Jellyxtreme/Categories', payload).then(function (snapshot) {
+                            return { provider: provider.label, snapshot: snapshot };
+                        });
+                    });
+
+                    return Promise.all(requests).then(function (results) {
+                        var merged = mergeCategorySnapshots(results.map(function (entry) {
+                            return entry.snapshot;
+                        }));
+                        renderCategoryList('LiveCategories', merged.live, currentConfig.SelectedLiveCategoryIds);
+                        renderCategoryList('VodCategories', merged.vod, currentConfig.SelectedVodCategoryIds);
+                        renderCategoryList('SeriesCategories', merged.series, currentConfig.SelectedSeriesCategoryIds);
+                        page().querySelector('#ConnectionStatus').textContent = 'Categories loaded from ' + results.length + ' provider(s).';
                         Dashboard.hideLoadingMsg();
                     }).catch(function (error) {
                         Dashboard.hideLoadingMsg();
@@ -374,11 +622,40 @@
                     });
                 }
 
+                function testConnectionForAllProviders() {
+                    var providerList = configuredProviders();
+                    if (providerList.length === 0) {
+                        page().querySelector('#ConnectionStatus').textContent = 'No provider credentials configured.';
+                        return Promise.resolve();
+                    }
+
+                    Dashboard.showLoadingMsg();
+                    var requests = providerList.map(function (provider) {
+                        return postJson('Jellyxtreme/TestConnection', toConnectionPayload(provider))
+                            .then(function (result) {
+                                var isSuccess = field(result || {}, 'IsSuccess', 'isSuccess') === true;
+                                var message = field(result || {}, 'Message', 'message') || (isSuccess ? 'Connection successful.' : 'Connection failed.');
+                                return provider.label + ': ' + (isSuccess ? 'OK' : message);
+                            })
+                            .catch(function () {
+                                return provider.label + ': failed';
+                            });
+                    });
+
+                    return Promise.all(requests).then(function (statusEntries) {
+                        page().querySelector('#ConnectionStatus').textContent = statusEntries.join(' | ');
+                        Dashboard.hideLoadingMsg();
+                    }).catch(function (error) {
+                        Dashboard.hideLoadingMsg();
+                        page().querySelector('#ConnectionStatus').textContent = ajaxErrorMessage(error, 'Unable to test providers.');
+                    });
+                }
+
                 document.getElementById('JellyxtremeConfigPage').addEventListener('pageshow', function () {
                     loadConfig();
                 });
 
-                ['#ServerUrl', '#Username', '#Password'].forEach(function (selector) {
+                ['#Provider1ServerUrl', '#Provider1Username', '#Provider1Password', '#Provider2ServerUrl', '#Provider2Username', '#Provider2Password', '#Provider3ServerUrl', '#Provider3Username', '#Provider3Password'].forEach(function (selector) {
                     document.getElementById('JellyxtremeConfigPage').querySelector(selector).addEventListener('input', updateConnectionButtons);
                 });
 
@@ -401,23 +678,7 @@
                 });
 
                 document.getElementById('TestConnectionButton').addEventListener('click', function () {
-                    var payload = connectionPayload();
-                    var validationMessage = validateConnectionPayload(payload);
-                    if (validationMessage) {
-                        page().querySelector('#ConnectionStatus').textContent = validationMessage;
-                        return;
-                    }
-
-                    Dashboard.showLoadingMsg();
-                    postJson('Jellyxtreme/TestConnection', payload).then(function (result) {
-                        var isSuccess = field(result || {}, 'IsSuccess', 'isSuccess') === true;
-                        var message = field(result || {}, 'Message', 'message') || (isSuccess ? 'Connection successful.' : 'Connection failed.');
-                        page().querySelector('#ConnectionStatus').textContent = isSuccess ? 'Connection successful.' : message;
-                        Dashboard.hideLoadingMsg();
-                    }).catch(function (error) {
-                        page().querySelector('#ConnectionStatus').textContent = ajaxErrorMessage(error, 'Connection failed.');
-                        Dashboard.hideLoadingMsg();
-                    });
+                    testConnectionForAllProviders();
                 });
 
                 document.getElementById('RefreshCategoriesButton').addEventListener('click', function () {
@@ -429,9 +690,15 @@
                     Dashboard.showLoadingMsg();
 
                     ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-                        config.ServerUrl = value('#ServerUrl');
-                        config.Username = value('#Username');
-                        config.Password = value('#Password');
+                        config.Provider1ServerUrl = value('#Provider1ServerUrl').trim();
+                        config.Provider1Username = value('#Provider1Username').trim();
+                        config.Provider1Password = value('#Provider1Password');
+                        config.Provider2ServerUrl = value('#Provider2ServerUrl').trim();
+                        config.Provider2Username = value('#Provider2Username').trim();
+                        config.Provider2Password = value('#Provider2Password');
+                        config.Provider3ServerUrl = value('#Provider3ServerUrl').trim();
+                        config.Provider3Username = value('#Provider3Username').trim();
+                        config.Provider3Password = value('#Provider3Password');
                         config.EnableLiveTv = checked('#EnableLiveTv');
                         config.EnableVod = checked('#EnableVod');
                         config.EnableSeries = checked('#EnableSeries');
@@ -440,6 +707,9 @@
                         config.SelectedSeriesCategoryIds = selectedCategoryIds('SeriesCategories');
                         config.SyncIntervalHours = parseInt(value('#SyncIntervalHours'), 10) || 12;
                         config.CacheMinutes = parseInt(value('#CacheMinutes'), 10) || 60;
+                        config.EnableMetadataEnrichment = checked('#EnableMetadataEnrichment');
+                        config.TmdbApiKey = value('#TmdbApiKey').trim();
+                        config.TvdbApiKey = value('#TvdbApiKey').trim();
 
                         ApiClient.updatePluginConfiguration(pluginId, config).then(Dashboard.processPluginConfigurationUpdateResult);
                     });

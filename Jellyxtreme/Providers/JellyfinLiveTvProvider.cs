@@ -95,9 +95,9 @@ public sealed class JellyfinLiveTvProvider : ITunerHost, IConfigurableTunerHost,
             .Select(channel => new ChannelInfo
             {
                 Name = channel.Name,
-                Id = channel.StreamId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                Number = channel.StreamId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                TunerChannelId = channel.StreamId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                Id = XtreamCacheIdentity.BuildItemKey(channel.ProviderId, channel.StreamId),
+                Number = channel.Name,
+                TunerChannelId = XtreamCacheIdentity.BuildItemKey(channel.ProviderId, channel.StreamId),
                 TunerHostId = ProviderType,
                 CallSign = channel.EpgChannelId ?? channel.Name,
                 ChannelType = ChannelType.TV,
@@ -119,7 +119,7 @@ public sealed class JellyfinLiveTvProvider : ITunerHost, IConfigurableTunerHost,
         var mediaSource = mediaSources.First();
         var channel = await GetCachedChannelAsync(channelId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("JellyXtreme live channel was not found in cache.");
-        var streamUrl = _streamResolver.ResolveLiveUrl(_configProvider(), channel.StreamId, channel.StreamExtension);
+        var streamUrl = _streamResolver.ResolveLiveUrl(_configProvider(), channel.ProviderId, channel.StreamId, channel.StreamExtension);
         mediaSource.LiveStreamId = channelId;
         mediaSource.RequiresOpening = false;
 
@@ -143,7 +143,7 @@ public sealed class JellyfinLiveTvProvider : ITunerHost, IConfigurableTunerHost,
         var mediaSource = mediaSources.First();
         var channel = await GetCachedChannelAsync(channelId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("JellyXtreme live channel was not found in cache.");
-        var streamUrl = _streamResolver.ResolveLiveUrl(_configProvider(), channel.StreamId, channel.StreamExtension);
+        var streamUrl = _streamResolver.ResolveLiveUrl(_configProvider(), channel.ProviderId, channel.StreamId, channel.StreamExtension);
         mediaSource.LiveStreamId = channelId;
         mediaSource.RequiresOpening = false;
 
@@ -159,15 +159,15 @@ public sealed class JellyfinLiveTvProvider : ITunerHost, IConfigurableTunerHost,
         }
 
         var config = _configProvider();
-        _ = _streamResolver.ResolveLiveUrl(config, channel.StreamId, channel.StreamExtension);
+        _ = _streamResolver.ResolveLiveUrl(config, channel.ProviderId, channel.StreamId, channel.StreamExtension);
         _logger.LogInformation("JellyXtreme resolved playback media source for live channel {ChannelId}.", channel.StreamId);
-        var safePath = BuildSafeLivePath(_localBaseUrlProvider(), channel.StreamId, channel.StreamExtension);
+        var safePath = BuildSafeLivePath(_localBaseUrlProvider(), channel.ProviderId, channel.StreamId, channel.StreamExtension);
 
         return
         [
             new MediaSourceInfo
             {
-                Id = channel.StreamId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                Id = $"jellyxtreme-live-{XtreamCacheIdentity.BuildItemKey(channel.ProviderId, channel.StreamId)}",
                 Name = channel.Name,
                 Path = safePath,
                 Protocol = MediaProtocol.Http,
@@ -180,9 +180,11 @@ public sealed class JellyfinLiveTvProvider : ITunerHost, IConfigurableTunerHost,
                 IsInfiniteStream = true,
                 RequiresOpening = true,
                 RequiresClosing = true,
-                OpenToken = channel.StreamId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                OpenToken = XtreamCacheIdentity.BuildItemKey(channel.ProviderId, channel.StreamId),
                 ReadAtNativeFramerate = true,
                 IgnoreDts = true,
+                GenPtsInput = true,
+                Timestamp = MediaBrowser.Model.MediaInfo.TransportStreamTimestamp.Valid,
                 SupportsProbing = true,
                 VideoType = VideoType.VideoFile,
                 MediaStreams = [],
@@ -248,8 +250,11 @@ public sealed class JellyfinLiveTvProvider : ITunerHost, IConfigurableTunerHost,
         CancellationToken cancellationToken)
     {
         var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var (providerId, streamId) = ParseChannelId(channelId);
         var channel = cache.LiveChannels.FirstOrDefault(item =>
-            string.Equals(item.StreamId.ToString(System.Globalization.CultureInfo.InvariantCulture), channelId, StringComparison.OrdinalIgnoreCase));
+            item.StreamId == streamId
+            && (string.IsNullOrWhiteSpace(providerId)
+                || string.Equals(item.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)));
 
         if (channel?.EpgChannelId is null)
         {
@@ -267,7 +272,7 @@ public sealed class JellyfinLiveTvProvider : ITunerHost, IConfigurableTunerHost,
             .Select(program => new ProgramInfo
             {
                 Id = program.Id,
-                ChannelId = channel.StreamId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ChannelId = XtreamCacheIdentity.BuildItemKey(channel.ProviderId, channel.StreamId),
                 Name = program.Title,
                 Overview = program.Description,
                 ShortOverview = program.Description,
@@ -290,9 +295,12 @@ public sealed class JellyfinLiveTvProvider : ITunerHost, IConfigurableTunerHost,
 
     private async Task<CachedLiveChannel?> GetCachedChannelAsync(string channelId, CancellationToken cancellationToken)
     {
+        var (providerId, streamId) = ParseChannelId(channelId);
         var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
         return cache.LiveChannels.FirstOrDefault(channel =>
-            string.Equals(channel.StreamId.ToString(System.Globalization.CultureInfo.InvariantCulture), channelId, StringComparison.OrdinalIgnoreCase));
+            channel.StreamId == streamId
+            && (string.IsNullOrWhiteSpace(providerId)
+                || string.Equals(channel.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)));
     }
 
     private static string[] BuildTags(CachedLiveChannel channel)
@@ -328,7 +336,7 @@ public sealed class JellyfinLiveTvProvider : ITunerHost, IConfigurableTunerHost,
         return string.IsNullOrWhiteSpace(extension) ? "mpegts" : extension.TrimStart('.');
     }
 
-    private static string BuildSafeLivePath(string localBaseUrl, int streamId, string? extension)
+    private static string BuildSafeLivePath(string localBaseUrl, string providerId, int streamId, string? extension)
     {
         var safeExtension = string.IsNullOrWhiteSpace(extension)
             ? "ts"
@@ -338,7 +346,17 @@ public sealed class JellyfinLiveTvProvider : ITunerHost, IConfigurableTunerHost,
             safeExtension = "ts";
         }
 
-        return $"{localBaseUrl.TrimEnd('/')}/Jellyxtreme/Live/{streamId.ToString(System.Globalization.CultureInfo.InvariantCulture)}.{safeExtension}";
+        return $"{localBaseUrl.TrimEnd('/')}/Jellyxtreme/Live/{Uri.EscapeDataString(providerId)}/{streamId.ToString(System.Globalization.CultureInfo.InvariantCulture)}.{safeExtension}";
+    }
+
+    private static (string? providerId, int streamId) ParseChannelId(string channelId)
+    {
+        if (XtreamCacheIdentity.TryParseItemKey(channelId, out var providerId, out var streamId))
+        {
+            return (providerId, streamId);
+        }
+
+        return (null, int.TryParse(channelId, out var parsedStreamId) ? parsedStreamId : 0);
     }
 
     private sealed class JellyxtremeLiveStream : ILiveStream, IDirectStreamProvider

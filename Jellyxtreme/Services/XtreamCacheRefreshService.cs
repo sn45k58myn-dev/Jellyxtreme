@@ -3,25 +3,36 @@ using Jellyxtreme.Cache;
 using Jellyxtreme.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
+using System.Globalization;
 
 namespace Jellyxtreme.Services;
 
 public sealed class XtreamCacheRefreshService
 {
+    private const int SeriesInfoConcurrency = 5;
+    private const int SeriesInfoBatchSize = 25;
+    private const int MetadataEnrichmentConcurrency = 4;
+
     private readonly XtreamApiClient _apiClient;
     private readonly XtreamCacheService _cacheService;
     private readonly XmlTvCacheService _xmlTvCacheService;
+    private readonly MetadataEnrichmentService _metadataEnrichmentService;
+    private readonly ICredentialStore _credentialStore;
     private readonly ILogger<XtreamCacheRefreshService> _logger;
 
     public XtreamCacheRefreshService(
         XtreamApiClient apiClient,
         XtreamCacheService cacheService,
         XmlTvCacheService xmlTvCacheService,
+        MetadataEnrichmentService metadataEnrichmentService,
+        ICredentialStore credentialStore,
         ILogger<XtreamCacheRefreshService> logger)
     {
         _apiClient = apiClient;
         _cacheService = cacheService;
         _xmlTvCacheService = xmlTvCacheService;
+        _metadataEnrichmentService = metadataEnrichmentService;
+        _credentialStore = credentialStore;
         _logger = logger;
     }
 
@@ -35,7 +46,8 @@ public sealed class XtreamCacheRefreshService
 
         try
         {
-            if (!HasCredentials(config))
+            var providers = _credentialStore.GetConfiguredProviderIds(config).ToList();
+            if (providers.Count == 0)
             {
                 stopwatch.Stop();
                 config.LastSyncDurationMs = stopwatch.ElapsedMilliseconds;
@@ -45,53 +57,132 @@ public sealed class XtreamCacheRefreshService
                 return new XtreamCacheDocument();
             }
 
-            var settings = XtreamConnectionSettings.FromConfig(config);
+            var existingDocument = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
             var document = new XtreamCacheDocument { RefreshedAt = DateTimeOffset.UtcNow };
-
-            var liveCategories = await _apiClient.GetLiveCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
-            var vodCategories = await _apiClient.GetVodCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
-            var seriesCategories = await _apiClient.GetSeriesCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
-
-            document.LiveCategories = ToCachedCategories(liveCategories, "live");
-            document.VodCategories = ToCachedCategories(vodCategories, "vod");
-            document.SeriesCategories = ToCachedCategories(seriesCategories, "series");
-            progress?.Report(15);
-
             var skippedSections = new List<string>();
 
-            if (XtreamSelectionFilter.ShouldCacheSection(config.EnableLiveTv, config.SelectedLiveCategoryIds))
+            var liveCategoryMap = new Dictionary<string, CachedCategory>(StringComparer.OrdinalIgnoreCase);
+            var vodCategoryMap = new Dictionary<string, CachedCategory>(StringComparer.OrdinalIgnoreCase);
+            var seriesCategoryMap = new Dictionary<string, CachedCategory>(StringComparer.OrdinalIgnoreCase);
+            var liveChannelMap = new Dictionary<string, CachedLiveChannel>(StringComparer.OrdinalIgnoreCase);
+            var vodItemMap = new Dictionary<string, CachedVodItem>(StringComparer.OrdinalIgnoreCase);
+            var seriesItemMap = new Dictionary<string, CachedSeriesItem>(StringComparer.OrdinalIgnoreCase);
+
+            var selectedLive = NormalizeSelectionSet(config.SelectedLiveCategoryIds);
+            var selectedVod = NormalizeSelectionSet(config.SelectedVodCategoryIds);
+            var selectedSeries = NormalizeSelectionSet(config.SelectedSeriesCategoryIds);
+
+            var sectionProgressStep = providers.Count > 0 ? 90 / providers.Count : 90;
+
+            for (var providerIndex = 0; providerIndex < providers.Count; providerIndex++)
             {
-                document.LiveChannels = await RefreshLiveAsync(_apiClient, settings, config, document.LiveCategories, cancellationToken).ConfigureAwait(false);
-                document.XmlTv = await _xmlTvCacheService.DownloadAndCacheAsync(settings, document.LiveChannels, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                skippedSections.Add("Live TV");
-                _logger.LogInformation("JellyXtreme Live TV cache skipped because it is disabled or no Live TV categories are selected.");
+                var providerId = providers[providerIndex];
+                var normalizedProviderId = XtreamCacheIdentity.NormalizeProviderId(providerId);
+                var settings = _credentialStore.GetConnectionSettings(config, normalizedProviderId);
+
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var providerLive = await _apiClient.GetLiveCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+                var providerVod = await _apiClient.GetVodCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+                var providerSeries = await _apiClient.GetSeriesCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+
+                AddCachedCategories(liveCategoryMap, ToCachedCategories(providerLive, normalizedProviderId, "live"));
+                AddCachedCategories(vodCategoryMap, ToCachedCategories(providerVod, normalizedProviderId, "vod"));
+                AddCachedCategories(seriesCategoryMap, ToCachedCategories(providerSeries, normalizedProviderId, "series"));
+
+                if (XtreamSelectionFilter.ShouldCacheSection(config.EnableLiveTv, selectedLive))
+                {
+                    var providerLiveChannels = await RefreshLiveAsync(
+                        _apiClient,
+                        settings,
+                        normalizedProviderId,
+                        liveCategoryMap.Values.Where(category => string.Equals(category.ProviderId, normalizedProviderId, StringComparison.OrdinalIgnoreCase)).ToList(),
+                        selectedLive,
+                        cancellationToken).ConfigureAwait(false);
+
+                    AddCachedItems(liveChannelMap, providerLiveChannels, channel => XtreamCacheIdentity.BuildItemKey(channel.ProviderId, channel.StreamId));
+                }
+                else if (providerIndex == 0)
+                {
+                    if (selectedLive.Count == 0)
+                    {
+                        skippedSections.Add("Live TV (all providers skipped - no category selection)");
+                    }
+                    else
+                    {
+                        skippedSections.Add("Live TV (disabled)");
+                    }
+                }
+
+                if (XtreamSelectionFilter.ShouldCacheSection(config.EnableVod, selectedVod))
+                {
+                    var providerVodItems = await RefreshVodAsync(
+                        _apiClient,
+                        settings,
+                        normalizedProviderId,
+                        selectedVod,
+                        cancellationToken).ConfigureAwait(false);
+                    await EnrichVodMetadataAsync(providerVodItems, config, cancellationToken).ConfigureAwait(false);
+
+                    AddCachedItems(vodItemMap, providerVodItems, item => XtreamCacheIdentity.BuildItemKey(item.ProviderId, item.StreamId));
+                }
+                else if (providerIndex == 0)
+                {
+                    if (selectedVod.Count == 0)
+                    {
+                        skippedSections.Add("VOD (all providers skipped - no category selection)");
+                    }
+                    else
+                    {
+                        skippedSections.Add("VOD (disabled)");
+                    }
+                }
+
+                if (XtreamSelectionFilter.ShouldCacheSection(config.EnableSeries, selectedSeries))
+                {
+                    var existingSeriesByProvider = existingDocument.SeriesItems
+                    .Where(item => string.Equals(item.ProviderId, normalizedProviderId, StringComparison.OrdinalIgnoreCase))
+                    .ToDictionary(item => XtreamCacheIdentity.BuildItemKey(item.ProviderId, item.SeriesId), item => item, StringComparer.OrdinalIgnoreCase);
+
+                    var providerSeriesItems = await RefreshSeriesAsync(
+                        _apiClient,
+                        settings,
+                        normalizedProviderId,
+                        selectedSeries,
+                        existingSeriesByProvider,
+                        cancellationToken).ConfigureAwait(false);
+                    await EnrichSeriesMetadataAsync(providerSeriesItems, config, cancellationToken).ConfigureAwait(false);
+
+                    AddCachedItems(seriesItemMap, providerSeriesItems, item => XtreamCacheIdentity.BuildItemKey(item.ProviderId, item.SeriesId));
+                }
+                else if (providerIndex == 0)
+                {
+                    if (selectedSeries.Count == 0)
+                    {
+                        skippedSections.Add("Series (all providers skipped - no category selection)");
+                    }
+                    else
+                    {
+                        skippedSections.Add("Series (disabled)");
+                    }
+                }
+
+                progress?.Report(15 + (providerIndex + 1) * sectionProgressStep);
             }
 
-            progress?.Report(45);
+            document.LiveCategories = liveCategoryMap.Values.OrderBy(category => category.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            document.VodCategories = vodCategoryMap.Values.OrderBy(category => category.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            document.SeriesCategories = seriesCategoryMap.Values.OrderBy(category => category.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            document.LiveChannels = liveChannelMap.Values.ToList();
+            document.VodItems = vodItemMap.Values.ToList();
+            document.SeriesItems = seriesItemMap.Values.ToList();
 
-            if (XtreamSelectionFilter.ShouldCacheSection(config.EnableVod, config.SelectedVodCategoryIds))
+            if (document.LiveChannels.Count > 0)
             {
-                document.VodItems = await RefreshVodAsync(_apiClient, settings, config, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                skippedSections.Add("VOD");
-                _logger.LogInformation("JellyXtreme VOD cache skipped because it is disabled or no VOD categories are selected.");
-            }
-
-            progress?.Report(70);
-
-            if (XtreamSelectionFilter.ShouldCacheSection(config.EnableSeries, config.SelectedSeriesCategoryIds))
-            {
-                document.SeriesItems = await RefreshSeriesAsync(_apiClient, settings, config, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                skippedSections.Add("Series");
-                _logger.LogInformation("JellyXtreme Series cache skipped because it is disabled or no Series categories are selected.");
+                document.XmlTv = await _xmlTvCacheService.DownloadAndCacheAsync(
+                    _credentialStore.GetConnectionSettings(config, null),
+                    document.LiveChannels,
+                    cancellationToken).ConfigureAwait(false);
             }
 
             progress?.Report(95);
@@ -117,6 +208,24 @@ public sealed class XtreamCacheRefreshService
             stopwatch.Stop();
             config.LastSyncDurationMs = stopwatch.ElapsedMilliseconds;
             config.LastSyncError = SanitizeError(ex);
+            try
+            {
+                await _cacheService.RollbackToBackupAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception rollbackEx)
+            {
+                _logger.LogWarning(rollbackEx, "JellyXtreme cache rollback to backup failed.");
+            }
+
+            try
+            {
+                await _cacheService.MarkRefreshFailureAsync(config.LastSyncError, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception markFailureEx)
+            {
+                _logger.LogWarning(markFailureEx, "JellyXtreme cache failure metadata update failed.");
+            }
+
             Plugin.Instance?.SaveConfiguration();
             _logger.LogError("JellyXtreme cache refresh failed after {DurationMs} ms: {Error}", stopwatch.ElapsedMilliseconds, config.LastSyncError);
             throw;
@@ -125,23 +234,75 @@ public sealed class XtreamCacheRefreshService
 
     public async Task<XtreamCategorySnapshot> GetCategoriesAsync(PluginConfiguration config, CancellationToken cancellationToken)
     {
-        if (!HasCredentials(config))
+        var providers = _credentialStore.GetConfiguredProviderIds(config).ToList();
+        if (providers.Count == 0)
         {
             return new XtreamCategorySnapshot([], [], []);
         }
 
-        var settings = XtreamConnectionSettings.FromConfig(config);
-        var live = await _apiClient.GetLiveCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
-        var vod = await _apiClient.GetVodCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
-        var series = await _apiClient.GetSeriesCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+        var liveCategories = new List<CachedCategory>();
+        var vodCategories = new List<CachedCategory>();
+        var seriesCategories = new List<CachedCategory>();
 
-        return new XtreamCategorySnapshot(live, vod, series);
+        foreach (var providerId in providers)
+        {
+            var settings = _credentialStore.GetConnectionSettings(config, providerId);
+
+            var live = await _apiClient.GetLiveCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+            var vod = await _apiClient.GetVodCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+            var series = await _apiClient.GetSeriesCategoriesAsync(settings, cancellationToken).ConfigureAwait(false);
+
+            AddCachedCategories(liveCategories, ToCachedCategories(live, XtreamCacheIdentity.NormalizeProviderId(providerId), "live"));
+            AddCachedCategories(vodCategories, ToCachedCategories(vod, XtreamCacheIdentity.NormalizeProviderId(providerId), "vod"));
+            AddCachedCategories(seriesCategories, ToCachedCategories(series, XtreamCacheIdentity.NormalizeProviderId(providerId), "series"));
+        }
+
+        return new XtreamCategorySnapshot(
+            liveCategories.OrderBy(category => category.Name, StringComparer.OrdinalIgnoreCase).ToList(),
+            vodCategories.OrderBy(category => category.Name, StringComparer.OrdinalIgnoreCase).ToList(),
+            seriesCategories.OrderBy(category => category.Name, StringComparer.OrdinalIgnoreCase).ToList());
     }
 
-    private static bool HasCredentials(PluginConfiguration config)
-        => XtreamApiClient.TryNormalizeServerUrl(config.ServerUrl, out _)
-            && !string.IsNullOrWhiteSpace(config.Username)
-            && !string.IsNullOrWhiteSpace(config.Password);
+    private static void AddCachedCategories(List<CachedCategory> destination, IReadOnlyList<CachedCategory> categories)
+    {
+        foreach (var category in categories)
+        {
+            var key = XtreamCacheIdentity.BuildItemKey(category.ProviderId, category.CategoryId);
+            var existingIndex = destination.FindIndex(item => XtreamCacheIdentity.BuildItemKey(item.ProviderId, item.CategoryId).Equals(key, StringComparison.OrdinalIgnoreCase));
+            if (existingIndex < 0)
+            {
+                destination.Add(category);
+            }
+        }
+    }
+
+    private static void AddCachedItems<TItem>(Dictionary<string, TItem> destination, IReadOnlyList<TItem> items, Func<TItem, string> keyFactory)
+    {
+        foreach (var item in items)
+        {
+            destination[keyFactory(item)] = item;
+        }
+    }
+
+    private static IReadOnlyCollection<string> NormalizeSelectionSet(IEnumerable<string>? selected)
+    {
+        if (selected is null)
+        {
+            return [];
+        }
+
+        var normalized = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var value in selected)
+        {
+            var normalizedValue = XtreamSelectionFilter.NormalizeSelectionId(value);
+            if (!string.IsNullOrWhiteSpace(normalizedValue))
+            {
+                normalized.Add(normalizedValue);
+            }
+        }
+
+        return normalized.ToList();
+    }
 
     private static string SanitizeError(Exception exception)
     {
@@ -155,11 +316,12 @@ public sealed class XtreamCacheRefreshService
         return $"{exception.GetType().Name}: {message}";
     }
 
-    private static List<CachedCategory> ToCachedCategories(IEnumerable<XtreamCategory> categories, string kind)
+    private static List<CachedCategory> ToCachedCategories(IEnumerable<XtreamCategory> categories, string providerId, string kind)
         => categories
             .Where(category => !string.IsNullOrWhiteSpace(category.CategoryId))
             .Select(category => new CachedCategory
             {
+                ProviderId = providerId,
                 CategoryId = category.CategoryId,
                 Name = category.CategoryName,
                 Kind = kind
@@ -169,18 +331,20 @@ public sealed class XtreamCacheRefreshService
     private static async Task<List<CachedLiveChannel>> RefreshLiveAsync(
         XtreamApiClient client,
         XtreamConnectionSettings settings,
-        PluginConfiguration config,
-        List<CachedCategory> categories,
+        string providerId,
+        IReadOnlyCollection<CachedCategory> categories,
+        IReadOnlyCollection<string> selectedCategoryIds,
         CancellationToken cancellationToken)
     {
         var categoryNames = categories.ToDictionary(category => category.CategoryId, category => category.Name, StringComparer.OrdinalIgnoreCase);
         var streams = await client.GetLiveStreamsAsync(settings, cancellationToken).ConfigureAwait(false);
 
         return streams
-            .Where(stream => XtreamSelectionFilter.IsCategorySelected(stream.CategoryId, config.SelectedLiveCategoryIds))
+            .Where(stream => XtreamSelectionFilter.IsCategorySelected(providerId, stream.CategoryId, selectedCategoryIds))
             .Where(stream => stream.StreamId > 0 && !string.IsNullOrWhiteSpace(stream.Name))
             .Select(stream => new CachedLiveChannel
             {
+                ProviderId = providerId,
                 Name = stream.Name!,
                 StreamId = stream.StreamId,
                 Logo = stream.StreamIcon,
@@ -195,16 +359,18 @@ public sealed class XtreamCacheRefreshService
     private static async Task<List<CachedVodItem>> RefreshVodAsync(
         XtreamApiClient client,
         XtreamConnectionSettings settings,
-        PluginConfiguration config,
+        string providerId,
+        IReadOnlyCollection<string> selectedCategoryIds,
         CancellationToken cancellationToken)
     {
         var streams = await client.GetVodStreamsAsync(settings, cancellationToken).ConfigureAwait(false);
 
         return streams
-            .Where(stream => XtreamSelectionFilter.IsCategorySelected(stream.CategoryId, config.SelectedVodCategoryIds))
+            .Where(stream => XtreamSelectionFilter.IsCategorySelected(providerId, stream.CategoryId, selectedCategoryIds))
             .Where(stream => stream.StreamId > 0 && !string.IsNullOrWhiteSpace(stream.Name))
             .Select(stream => new CachedVodItem
             {
+                ProviderId = providerId,
                 Name = stream.Name!,
                 StreamId = stream.StreamId,
                 CategoryId = stream.CategoryId!,
@@ -216,40 +382,246 @@ public sealed class XtreamCacheRefreshService
             .ToList();
     }
 
+    private async Task EnrichVodMetadataAsync(
+        IReadOnlyCollection<CachedVodItem> vodItems,
+        PluginConfiguration config,
+        CancellationToken cancellationToken)
+    {
+        if (!config.EnableMetadataEnrichment || vodItems.Count == 0)
+        {
+            return;
+        }
+
+        using var throttle = new SemaphoreSlim(MetadataEnrichmentConcurrency, MetadataEnrichmentConcurrency);
+        var tasks = vodItems.Select(async vod =>
+        {
+            await throttle.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _metadataEnrichmentService.EnrichVodMetadataAsync(vod, config, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                throttle.Release();
+            }
+        }).ToList();
+
+        try
+        {
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogInformation("JellyXtreme metadata enrichment for VOD items was canceled.");
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning("JellyXtreme metadata enrichment for VOD items encountered an error: {Message}", XtreamApiClient.Redact(exception.Message));
+        }
+    }
+
+    private async Task EnrichSeriesMetadataAsync(
+        IReadOnlyCollection<CachedSeriesItem> seriesItems,
+        PluginConfiguration config,
+        CancellationToken cancellationToken)
+    {
+        if (!config.EnableMetadataEnrichment || seriesItems.Count == 0)
+        {
+            return;
+        }
+
+        using var throttle = new SemaphoreSlim(MetadataEnrichmentConcurrency, MetadataEnrichmentConcurrency);
+        var tasks = seriesItems.Select(async series =>
+        {
+            await throttle.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _metadataEnrichmentService.EnrichSeriesMetadataAsync(series, config, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                throttle.Release();
+            }
+        }).ToList();
+
+        try
+        {
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogInformation("JellyXtreme metadata enrichment for series items was canceled.");
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning("JellyXtreme metadata enrichment for series items encountered an error: {Message}", XtreamApiClient.Redact(exception.Message));
+        }
+    }
+
     private async Task<List<CachedSeriesItem>> RefreshSeriesAsync(
         XtreamApiClient client,
         XtreamConnectionSettings settings,
-        PluginConfiguration config,
+        string providerId,
+        IReadOnlyCollection<string> selectedCategoryIds,
+        Dictionary<string, CachedSeriesItem> existingSeriesByProvider,
         CancellationToken cancellationToken)
     {
         var seriesList = await client.GetSeriesAsync(settings, cancellationToken).ConfigureAwait(false);
         var validSeries = seriesList
             .Where(series => series.SeriesId > 0 && !string.IsNullOrWhiteSpace(series.Name))
+            .Where(series => XtreamSelectionFilter.IsCategorySelected(providerId, series.CategoryId, selectedCategoryIds))
             .ToList();
 
-        using var throttle = new SemaphoreSlim(5, 5);
-        var completed = 0;
-        var tasks = validSeries.Select(series => FetchSeriesInfoAsync(
+        if (validSeries.Count == 0)
+        {
+            _logger.LogInformation("JellyXtreme series sync skipped because no series were selected for provider {ProviderId}.", providerId);
+            return [];
+        }
+
+        var changedSeries = new List<XtreamSeries>();
+        var unchangedSeries = 0;
+
+        foreach (var series in validSeries)
+        {
+            var key = XtreamCacheIdentity.BuildItemKey(providerId, series.SeriesId);
+            var existing = existingSeriesByProvider.GetValueOrDefault(key);
+            var baseFingerprint = BuildSeriesBaseFingerprint(series);
+            var hasChangeFromBase = existing is null
+                || !string.Equals(existing.BaseFingerprint, baseFingerprint, StringComparison.Ordinal);
+
+            var hasChangeFromLastModified = !HasMatchingSeriesLastModified(series, existing);
+            if (existing is null
+                || existing.Seasons.Count == 0
+                || string.IsNullOrWhiteSpace(existing.EpisodeFingerprint)
+                || hasChangeFromBase
+                || hasChangeFromLastModified)
+            {
+                changedSeries.Add(series);
+            }
+            else
+            {
+                unchangedSeries++;
+            }
+        }
+
+        var refreshedSeries = await RefreshSeriesInfoBatchAsync(
             client,
             settings,
-            config,
-            series,
-            throttle,
-            validSeries.Count,
-            () => Interlocked.Increment(ref completed),
-            cancellationToken));
+            providerId,
+            changedSeries,
+            cancellationToken).ConfigureAwait(false);
 
-        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
-        return results.Where(item => item is not null).Select(item => item!).ToList();
+        var results = new List<CachedSeriesItem>(capacity: validSeries.Count);
+        var importedSeries = 0;
+        var skippedSeries = 0;
+        var droppedSeries = 0;
+
+        foreach (var series in validSeries)
+        {
+            var key = XtreamCacheIdentity.BuildItemKey(providerId, series.SeriesId);
+            if (refreshedSeries.TryGetValue(key, out var cachedSeries))
+            {
+                cachedSeries.BaseFingerprint = BuildSeriesBaseFingerprint(series);
+                cachedSeries.ProviderId = providerId;
+                importedSeries++;
+                results.Add(cachedSeries);
+                continue;
+            }
+
+            var existingSeries = existingSeriesByProvider.GetValueOrDefault(key);
+            if (existingSeries is not null)
+            {
+                skippedSeries++;
+                results.Add(existingSeries);
+                continue;
+            }
+
+            droppedSeries++;
+            _logger.LogWarning("JellyXtreme dropped series {SeriesId} from provider {ProviderId} because series info could not be refreshed.", series.SeriesId, providerId);
+        }
+
+        if (droppedSeries > 0)
+        {
+            _logger.LogWarning(
+                "JellyXtreme skipped {DroppedCount} selected series after metadata fetch failure because no cache copy existed for provider {ProviderId}.",
+                droppedSeries,
+                providerId);
+        }
+
+        _logger.LogInformation(
+            "JellyXtreme series sync summary for provider {ProviderId}: {ImportedCount} imported/updated, {UnchangedCount} unchanged, {SkippedCount} restored from cache.",
+            providerId,
+            importedSeries,
+            unchangedSeries,
+            skippedSeries);
+
+        return results;
+    }
+
+    private async Task<Dictionary<string, CachedSeriesItem>> RefreshSeriesInfoBatchAsync(
+        XtreamApiClient client,
+        XtreamConnectionSettings settings,
+        string providerId,
+        List<XtreamSeries> changedSeries,
+        CancellationToken cancellationToken)
+    {
+        if (changedSeries.Count == 0)
+        {
+            return [];
+        }
+
+        _logger.LogInformation("JellyXtreme refreshing {ChangedCount} series from Xtream metadata endpoint for provider {ProviderId}.", changedSeries.Count, providerId);
+
+        var refreshedSeries = new Dictionary<string, CachedSeriesItem>(changedSeries.Count);
+        var totalFetched = 0;
+        for (var startIndex = 0; startIndex < changedSeries.Count; startIndex += SeriesInfoBatchSize)
+        {
+            var batch = changedSeries
+                .Skip(startIndex)
+                .Take(SeriesInfoBatchSize)
+                .Select(series => series)
+                .ToList();
+
+            using var throttle = new SemaphoreSlim(SeriesInfoConcurrency, SeriesInfoConcurrency);
+            var completed = 0;
+            var tasks = batch.Select(series => FetchSeriesInfoAsync(
+                client,
+                settings,
+                providerId,
+                series,
+                throttle,
+                batch.Count,
+                () => Interlocked.Increment(ref completed),
+                cancellationToken)).ToList();
+
+            var seriesItems = await Task.WhenAll(tasks).ConfigureAwait(false);
+            var fetchedInBatch = seriesItems.Count(item => item is not null);
+            totalFetched += fetchedInBatch;
+            foreach (var item in seriesItems.Where(item => item is not null))
+            {
+                refreshedSeries[XtreamCacheIdentity.BuildItemKey(providerId, item.SeriesId)] = item;
+            }
+
+            _logger.LogInformation(
+                "JellyXtreme completed batch {Batch} for series metadata for provider {ProviderId}. Total completed: {Completed}/{Total}",
+                (startIndex / SeriesInfoBatchSize) + 1,
+                providerId,
+                totalFetched,
+                changedSeries.Count);
+        }
+
+        return refreshedSeries;
     }
 
     private async Task<CachedSeriesItem?> FetchSeriesInfoAsync(
         XtreamApiClient client,
         XtreamConnectionSettings settings,
-        PluginConfiguration config,
+        string providerId,
         XtreamSeries series,
         SemaphoreSlim throttle,
-        int totalCount,
+        int batchCount,
         Func<int> incrementCompleted,
         CancellationToken cancellationToken)
     {
@@ -259,30 +631,31 @@ public sealed class XtreamCacheRefreshService
             cancellationToken.ThrowIfCancellationRequested();
             var info = await client.GetSeriesInfoAsync(settings, series.SeriesId, cancellationToken).ConfigureAwait(false);
             var completed = incrementCompleted();
-            if (completed % 25 == 0 || completed == totalCount)
-            {
-                _logger.LogInformation("JellyXtreme fetched series metadata for {CompletedCount}/{TotalCount} series.", completed, totalCount);
-            }
 
-            if (!XtreamSelectionFilter.IsCategorySelected(series.CategoryId, config.SelectedSeriesCategoryIds))
+            if (completed % 25 == 0 || completed == batchCount)
             {
-                return null;
+                _logger.LogInformation("JellyXtreme fetched series metadata for {CompletedCount}/{TotalCount} in current batch for provider {ProviderId}.", completed, batchCount, providerId);
             }
 
             return new CachedSeriesItem
             {
+                ProviderId = providerId,
                 Name = series.Name!,
                 SeriesId = series.SeriesId,
                 CategoryId = series.CategoryId!,
                 Poster = series.Cover,
                 Plot = info?.Info?.Plot ?? series.Plot,
                 Rating = series.Rating,
-                Seasons = ToCachedSeasons(info)
+                BaseFingerprint = BuildSeriesBaseFingerprint(series),
+                EpisodeFingerprint = BuildEpisodeFingerprint(info),
+                LastInfoModifiedUtc = ParseLastModified(info?.LastModified) ?? ParseLastModified(series.LastModified),
+                LastInfoFetchedUtc = DateTimeOffset.UtcNow,
+                Seasons = ToCachedSeasons(info, providerId)
             };
         }
         catch (Exception ex) when (IsSeriesMetadataFailure(ex, cancellationToken))
         {
-            _logger.LogWarning("Skipping Xtream series {SeriesId} after metadata fetch failure: {Error}", series.SeriesId, SanitizeError(ex));
+            _logger.LogWarning("Skipping Xtream series {SeriesId} from provider {ProviderId} after metadata fetch failure: {Error}", series.SeriesId, providerId, SanitizeError(ex));
             return null;
         }
         finally
@@ -291,12 +664,88 @@ public sealed class XtreamCacheRefreshService
         }
     }
 
+    private static bool HasMatchingSeriesLastModified(XtreamSeries series, CachedSeriesItem? existingSeries)
+    {
+        var latestModified = ParseLastModified(series.LastModified);
+        if (latestModified is null || existingSeries?.LastInfoModifiedUtc is null)
+        {
+            return false;
+        }
+
+        return latestModified == existingSeries.LastInfoModifiedUtc;
+    }
+
+    private static string BuildSeriesBaseFingerprint(XtreamSeries series)
+    {
+        return string.Join("|", new[]
+        {
+            series.SeriesId.ToString(CultureInfo.InvariantCulture),
+            series.CategoryId ?? string.Empty,
+            series.Name ?? string.Empty,
+            series.Cover ?? string.Empty,
+            series.Plot ?? string.Empty,
+            series.Rating?.ToString(CultureInfo.InvariantCulture) ?? string.Empty
+        });
+    }
+
+    private static string BuildEpisodeFingerprint(XtreamSeriesInfoResponse? info)
+    {
+        if (info?.Episodes is null)
+        {
+            return string.Empty;
+        }
+
+        var seasonEntries = info.Episodes
+            .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+            .Select(entry =>
+            {
+                var episodes = entry.Value
+                    .Where(episode => int.TryParse(episode.Id, out _))
+                    .OrderBy(episode => episode.Id, StringComparer.Ordinal)
+                    .Select(episode => string.Join("|", new[]
+                    {
+                        episode.Id ?? string.Empty,
+                        episode.Season.ToString(CultureInfo.InvariantCulture),
+                        episode.EpisodeNumber ?? string.Empty,
+                        episode.Title ?? string.Empty,
+                        episode.ContainerExtension ?? string.Empty,
+                        episode.Info?.MovieImage ?? string.Empty,
+                        episode.Info?.Plot ?? string.Empty,
+                        episode.Info?.ReleaseDate ?? string.Empty
+                    }));
+
+                return $"{entry.Key}:{string.Join(",", episodes)}";
+            });
+
+        return string.Join(";", seasonEntries);
+    }
+
+    private static DateTimeOffset? ParseLastModified(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var unixSeconds))
+        {
+            return DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
+        }
+
+        if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
     private static bool IsSeriesMetadataFailure(Exception exception, CancellationToken cancellationToken)
         => exception is HttpRequestException
             || exception is System.Text.Json.JsonException
             || exception is TaskCanceledException && !cancellationToken.IsCancellationRequested;
 
-    private static List<CachedSeason> ToCachedSeasons(XtreamSeriesInfoResponse? info)
+    private static List<CachedSeason> ToCachedSeasons(XtreamSeriesInfoResponse? info, string providerId)
     {
         if (info?.Episodes is null)
         {
@@ -317,6 +766,7 @@ public sealed class XtreamCacheRefreshService
                             _ = int.TryParse(episode.Id, out var streamId);
                             return new CachedEpisodeItem
                             {
+                                ProviderId = providerId,
                                 Title = string.IsNullOrWhiteSpace(episode.Title) ? $"Episode {episode.EpisodeNumber}" : episode.Title!,
                                 StreamId = streamId,
                                 EpisodeNumber = episode.EpisodeNumber,
@@ -334,6 +784,6 @@ public sealed class XtreamCacheRefreshService
 }
 
 public sealed record XtreamCategorySnapshot(
-    IReadOnlyList<XtreamCategory> Live,
-    IReadOnlyList<XtreamCategory> Vod,
-    IReadOnlyList<XtreamCategory> Series);
+    IReadOnlyList<CachedCategory> Live,
+    IReadOnlyList<CachedCategory> Vod,
+    IReadOnlyList<CachedCategory> Series);

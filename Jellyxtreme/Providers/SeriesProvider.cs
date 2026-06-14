@@ -30,31 +30,50 @@ public class SeriesProvider
     public async Task<IReadOnlyList<SeriesItemInfo>> GetSeriesInfosAsync(CancellationToken cancellationToken)
     {
         var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
-        var categoryNames = cache.SeriesCategories.ToDictionary(category => category.CategoryId, category => category.Name, StringComparer.OrdinalIgnoreCase);
+        var categoryNames = cache.SeriesCategories.ToDictionary(
+            category => XtreamCacheIdentity.BuildItemKey(category.ProviderId, category.CategoryId),
+            category => category.Name,
+            StringComparer.OrdinalIgnoreCase);
 
         return cache.SeriesItems
-            .Select(series => ToInfo(series, categoryNames.GetValueOrDefault(series.CategoryId)))
+            .Select(series => ToInfo(
+                series,
+                categoryNames.GetValueOrDefault(XtreamCacheIdentity.BuildItemKey(series.ProviderId, series.CategoryId))))
             .ToList();
     }
 
     public async Task<SeriesItemInfo?> GetSeriesInfoAsync(int seriesId, CancellationToken cancellationToken)
+        => await GetSeriesInfoAsync(seriesId, null, cancellationToken).ConfigureAwait(false);
+
+    public async Task<SeriesItemInfo?> GetSeriesInfoAsync(int seriesId, string? providerId, CancellationToken cancellationToken)
     {
         var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
-        var series = cache.SeriesItems.FirstOrDefault(item => item.SeriesId == seriesId);
+        var normalizedProviderId = NormalizeProviderId(providerId);
+        var series = cache.SeriesItems.FirstOrDefault(item =>
+            item.SeriesId == seriesId
+            && (normalizedProviderId is null || string.Equals(item.ProviderId, normalizedProviderId, StringComparison.OrdinalIgnoreCase)));
         if (series is null)
         {
             return null;
         }
 
         var categoryName = cache.SeriesCategories.FirstOrDefault(category =>
-            string.Equals(category.CategoryId, series.CategoryId, StringComparison.OrdinalIgnoreCase))?.Name;
+                string.Equals(category.ProviderId, series.ProviderId, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(category.CategoryId, series.CategoryId, StringComparison.OrdinalIgnoreCase))
+            ?.Name;
         return ToInfo(series, categoryName);
     }
 
     public async Task<IReadOnlyList<SeriesEpisodeInfo>> GetEpisodesAsync(int seriesId, CancellationToken cancellationToken)
+        => await GetEpisodesAsync(seriesId, null, cancellationToken).ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<SeriesEpisodeInfo>> GetEpisodesAsync(int seriesId, string? providerId, CancellationToken cancellationToken)
     {
         var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
-        var series = cache.SeriesItems.FirstOrDefault(item => item.SeriesId == seriesId);
+        var series = cache.SeriesItems.FirstOrDefault(item =>
+            item.SeriesId == seriesId
+            && (string.IsNullOrWhiteSpace(providerId)
+                || string.Equals(item.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)));
         if (series is null)
         {
             return [];
@@ -66,12 +85,17 @@ public class SeriesProvider
     }
 
     public async Task<IReadOnlyList<MediaSourceInfo>> GetEpisodeMediaSourcesAsync(int episodeStreamId, CancellationToken cancellationToken)
+        => await GetEpisodeMediaSourcesAsync(episodeStreamId, null, cancellationToken).ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<MediaSourceInfo>> GetEpisodeMediaSourcesAsync(int episodeStreamId, string? providerId, CancellationToken cancellationToken)
     {
         var cache = await _cacheService.LoadAsync(cancellationToken).ConfigureAwait(false);
         var episode = cache.SeriesItems
             .SelectMany(series => series.Seasons)
             .SelectMany(season => season.Episodes)
-            .FirstOrDefault(item => item.StreamId == episodeStreamId);
+            .FirstOrDefault(item => item.StreamId == episodeStreamId
+                && (string.IsNullOrWhiteSpace(providerId)
+                    || string.Equals(item.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)));
 
         if (episode is null)
         {
@@ -134,6 +158,11 @@ public class SeriesProvider
             episode.Poster,
             episode.Plot,
             episode.ReleaseDate);
+
+    private static string? NormalizeProviderId(string? providerId)
+        => string.IsNullOrWhiteSpace(providerId)
+            ? null
+            : providerId;
 }
 
 public sealed class XtreamSeriesProvider : SeriesProvider
